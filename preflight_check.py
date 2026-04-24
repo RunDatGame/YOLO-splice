@@ -10,7 +10,6 @@ from pipeline_splice.core.config import (
     build_task_input,
     load_pipeline_config,
     normalize_model_mode,
-    update_task_inputs,
     validate_runtime_config,
 )
 
@@ -64,8 +63,9 @@ def main() -> int:
     print(f"Python: {sys.version.splitlines()[0]}")
 
     task = build_task_input(args.csv, args.video, args.work_dir)
-    config_path = task.work_dir / "config.txt"
-    update_task_inputs(config_path, task.video_path, task.csv_path)
+    config_path = task.work_dir / "config" / "splice.txt"
+    if not config_path.exists():
+        config_path = task.work_dir / "config.txt"
     config = load_pipeline_config(config_path, task, model_mode_override=normalize_model_mode(args.mode))
 
     errors = []

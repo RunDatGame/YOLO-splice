@@ -202,6 +202,7 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
     one_model_per_segment = str(raw_config.get("one_model_per_segment", "true")).strip().lower() not in ("false", "0", "no", "off")
     global_x_offset = float(raw_config.get("global_x_offset", -2.0))
     manhole_half_length = float(raw_config.get("manhole_half_length", 2.0))
+    pixel_per_meter = float(raw_config.get("pixel_per_meter", 1000.0))
 
     return PipelineConfig(
         config_path=config_path,
@@ -231,6 +232,7 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
         one_model_per_segment=one_model_per_segment,
         global_x_offset=global_x_offset,
         manhole_half_length=manhole_half_length,
+        pixel_per_meter=pixel_per_meter,
     )
 
 

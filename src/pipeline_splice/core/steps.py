@@ -215,19 +215,17 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
             ]
         )
 
+    log_path = workspace_dir / "meshroom.log"
     try:
-        completed = subprocess.run(
-            command,
-            check=True,
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-        )
+        with log_path.open("w", encoding="utf-8") as log_file:
+            subprocess.run(
+                command,
+                check=True,
+                cwd=workspace_dir,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+            )
     except subprocess.CalledProcessError as error:
-        stdout = (error.stdout or "").strip()
-        stderr = (error.stderr or "").strip()
         details: list[str] = [
             f"Meshroom 重建失败，返回码: {error.returncode}",
             f"运行目录: {workspace_dir}",
@@ -235,12 +233,14 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
             "执行命令:",
             " ".join(f'"{part}"' if " " in part else part for part in command),
         ]
-        if stdout:
-            details.append("Meshroom 输出:")
-            details.append(stdout[-4000:])
-        if stderr:
-            details.append("Meshroom 错误:")
-            details.append(stderr[-4000:])
+        if log_path.exists():
+            try:
+                log_tail = log_path.read_text(encoding="utf-8", errors="ignore")[-4000:]
+                if log_tail.strip():
+                    details.append("Meshroom 日志尾部:")
+                    details.append(log_tail)
+            except OSError:
+                pass
         return StepResult("reconstruct", False, "\n".join(details))
 
     paths.reconstruction_dir.mkdir(parents=True, exist_ok=True)
@@ -250,18 +250,18 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
 
     mesh_path = find_reconstruction_mesh(paths.reconstruction_dir)
     if mesh_path is None:
-        stdout = (completed.stdout or "").strip()
-        stderr = (completed.stderr or "").strip()
         details = [
             f"Meshroom 已执行，但未找到重建 mesh: {paths.reconstruction_dir}",
             f"临时重建目录: {reconstruction_dir}",
         ]
-        if stdout:
-            details.append("Meshroom 输出:")
-            details.append(stdout[-4000:])
-        if stderr:
-            details.append("Meshroom 错误:")
-            details.append(stderr[-4000:])
+        if log_path.exists():
+            try:
+                log_tail = log_path.read_text(encoding="utf-8", errors="ignore")[-4000:]
+                if log_tail.strip():
+                    details.append("Meshroom 日志尾部:")
+                    details.append(log_tail)
+            except OSError:
+                pass
         return StepResult("reconstruct", False, "\n".join(details))
 
     return StepResult("reconstruct", True, "Meshroom 重建完成", mesh_path)

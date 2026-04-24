@@ -33,6 +33,7 @@ def run_detection_stage(
         pipe_params,
         device=detect_engine.device,
         visual_callback=visual_callback,
+        pixel_per_meter=config.pixel_per_meter,
     )
 
     detect_engine.process_best_defects(

@@ -42,3 +42,6 @@ outer: 0.60
 length: 3.0
 segment: 1
 interval: 100
+
+# 像素-米换算系数（默认 1000，可根据摄像头标定调整）
+pixel_per_meter: 1000

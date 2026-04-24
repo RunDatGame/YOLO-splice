@@ -41,6 +41,7 @@ class PipelineConfig:
     one_model_per_segment: bool = True
     global_x_offset: float = -2.0
     manhole_half_length: float = 2.0
+    pixel_per_meter: float = 1000.0
 
 
 @dataclass(frozen=True)
