@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from pipeline_core.config import (
+from pipeline_splice.core.config import (
     build_task_input,
     load_pipeline_config,
     normalize_model_mode,

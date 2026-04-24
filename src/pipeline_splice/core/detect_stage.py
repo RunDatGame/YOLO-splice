@@ -7,7 +7,11 @@ from pipeline_splice.detection import engine as detect_engine
 from .contracts import DetectArtifacts, PipelineConfig
 
 
-def run_detection_stage(config: PipelineConfig, visual_callback=None) -> DetectArtifacts:
+def run_detection_stage(
+    config: PipelineConfig,
+    visual_callback=None,
+    output_dir: Path | None = None,
+) -> DetectArtifacts:
     video_path = str(config.video_path)
     result_dir = Path(video_path).stem
     frame_dir = Path(detect_engine.ROOT / "runs" / "detect" / result_dir / "frames")
@@ -30,15 +34,17 @@ def run_detection_stage(config: PipelineConfig, visual_callback=None) -> DetectA
         visual_callback=visual_callback,
     )
 
-    detect_engine.process_best_defects(best_defects, result_dir, pipe_params, device=detect_engine.device)
+    detect_engine.process_best_defects(
+        best_defects,
+        result_dir,
+        pipe_params,
+        device=detect_engine.device,
+        output_dir=output_dir,
+        use_depth=config.use_depth,
+    )
 
-    candidates = [
-        Path.cwd() / "defect_results_full.csv",
-        Path(config.config_path.parent / "defect_results_full.csv"),
-        Path(detect_engine.ROOT) / "defect_results_full.csv",
-    ]
-    detect_csv_local = next((path for path in candidates if path.exists()), None)
-    if detect_csv_local is None:
+    detect_csv_local = detect_engine.ROOT / "runs" / "detect" / result_dir / "defect_results_full.csv"
+    if not detect_csv_local.exists():
         raise RuntimeError("检测阶段结束，但未生成 defect_results_full.csv")
 
     return DetectArtifacts(

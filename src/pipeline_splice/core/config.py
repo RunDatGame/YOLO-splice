@@ -196,6 +196,7 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
     )
     meshroom_default_fov = float(raw_config.get("meshroom_default_fov", 45.0))
     meshroom_depth_downscale = int(raw_config.get("meshroom_depth_downscale", 2))
+    use_depth = str(raw_config.get("use_depth", "true")).strip().lower() not in ("false", "0", "no", "off")
 
     return PipelineConfig(
         config_path=config_path,
@@ -219,6 +220,7 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
         length=float(raw_config["length"]),
         segment=int(raw_config["segment"]),
         interval=int(raw_config["interval"]),
+        use_depth=use_depth,
     )
 
 
@@ -228,8 +230,9 @@ def validate_runtime_config(config: PipelineConfig, task: TaskInput) -> None:
         "里程 CSV": task.csv_path,
         "Blender": config.blender_path,
         "YOLO 权重": task.work_dir / "weights" / "best.pt",
-        "深度权重": task.work_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth",
     }
+    if config.use_depth:
+        common_required["深度权重"] = task.work_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth"
 
     if config.model_mode == "library":
         common_required["缺陷模型库"] = config.dataset_path
@@ -254,8 +257,9 @@ def validate_detection_config(config: PipelineConfig, task: TaskInput) -> None:
         "视频文件": task.video_path,
         "里程 CSV": task.csv_path,
         "YOLO 权重": task.work_dir / "weights" / "best.pt",
-        "深度权重": task.work_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth",
     }
+    if config.use_depth:
+        required["深度权重"] = task.work_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth"
     missing = [f"{name}: {path}" for name, path in required.items() if path is None or not path.exists()]
     if missing:
         raise FileNotFoundError("检测阶段所需文件缺失:\n" + "\n".join(missing))

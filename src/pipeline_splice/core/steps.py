@@ -93,12 +93,9 @@ def extract_video_frames(task: TaskInput, config: PipelineConfig, force: bool = 
             if existing.is_file():
                 existing.unlink()
 
-    old_cwd = Path.cwd()
-    os.chdir(task.work_dir)
-    try:
-        frame_count, _, _, _ = detect_engine.save_frames(str(task.video_path), str(frame_dir), config.interval)
-    finally:
-        os.chdir(old_cwd)
+    frame_count, _, _, _ = detect_engine.save_frames(
+        str(task.video_path), str(frame_dir), config.interval
+    )
 
     if not frame_count:
         return StepResult("extract", False, f"视频抽帧失败: {task.video_path}")
@@ -271,12 +268,7 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
 
 
 def run_detect(task: TaskInput, config: PipelineConfig, paths: TaskPaths, visual_callback=None) -> StepResult:
-    old_cwd = Path.cwd()
-    os.chdir(task.work_dir)
-    try:
-        artifacts = run_detection_stage(config, visual_callback=visual_callback)
-    finally:
-        os.chdir(old_cwd)
+    artifacts = run_detection_stage(config, visual_callback=visual_callback, output_dir=task.work_dir)
 
     if not isinstance(artifacts, DetectArtifacts) or not artifacts.detect_csv_local.exists():
         return StepResult("detect", False, "未生成检测 CSV")

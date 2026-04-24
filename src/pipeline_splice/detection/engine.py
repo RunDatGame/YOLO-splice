@@ -8,6 +8,7 @@ import glob
 import re
 import logging
 import warnings
+from functools import lru_cache
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -19,24 +20,11 @@ import argparse
 import shutil
 
 
-# --- 环境设置 ---
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-warnings.filterwarnings("ignore")
-try:
-    import pkg_resources
-
-    warnings.filterwarnings("ignore", category=UserWarning, module='pkg_resources')
-except ImportError:
-    pass
-
 # --- YOLO 及本地模块 ---
 from models.common import DetectMultiBackend
 from utils.general import (LOGGER, check_img_size, non_max_suppression, scale_boxes)
 from utils.torch_utils import select_device, smart_inference_mode
 from utils.plots import Annotator, colors
-
-# --- 日志配置 ---
-logging.basicConfig(format='%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S', level=logging.INFO)
 
 # --- 全局常量 ---
 PIPE_WALL_THICKNESS = 0.01
@@ -100,32 +88,33 @@ def get_resource_path(relative_path):
 def init_depth_model():
     global depth_model
     if depth_model is None:
+        weight_file = get_resource_path('checkpoints/depth_anything_v2_metric_hypersim_vits.pth')
+        if not os.path.exists(weight_file):
+            raise FileNotFoundError(f"深度权重文件不存在: {weight_file}")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             from depth_anything_v2.dpt import DepthAnythingV2
             depth_model = DepthAnythingV2(**model_configs['vits'])
-            weight_file = get_resource_path('checkpoints/depth_anything_v2_metric_hypersim_vits.pth')
             depth_model.load_state_dict(torch.load(weight_file, map_location=device))
             depth_model.to(device).eval()
     return depth_model
 
 
-def get_defect_center_depth(img, bbox_center):
-    if img is None: return None
-    model = init_depth_model()
-    x, y = int(bbox_center[0]), int(bbox_center[1])
-    size = 256
-    h, w = img.shape[:2]
-    x1, x2 = max(0, x - size // 2), min(w, x + size // 2)
-    y1, y2 = max(0, y - size // 2), min(h, y + size // 2)
-    defect_img = img[y1:y2, x1:x2]
-    if defect_img.size == 0: return None
+def get_frame_depth_map(img):
+    """对整帧进行深度推理并返回深度图，同帧多个缺陷时复用。"""
+    if img is None:
+        return None
+    try:
+        model = init_depth_model()
+    except (FileNotFoundError, RuntimeError) as exc:
+        LOGGER.warning(f"深度模型加载失败: {exc}")
+        return None
     try:
         with torch.no_grad():
-            depth_map = model.infer_image(defect_img)
-        dh, dw = depth_map.shape
-        return float(depth_map[min(dh // 2, dh - 1), min(dw // 2, dw - 1)].item())
-    except:
+            depth_map = model.infer_image(img)
+        return depth_map
+    except (RuntimeError, ValueError, IndexError, AttributeError) as exc:
+        LOGGER.warning(f"深度估计失败: {exc}")
         return None
 
 
@@ -174,7 +163,8 @@ def load_csv_mileage_map(csv_path):
         mil = pd.to_numeric(df[5], errors='coerce')
         return mil[full_timestamps.notna() & mil.notna()].set_axis(
             full_timestamps[full_timestamps.notna() & mil.notna()])
-    except:
+    except Exception as exc:
+        LOGGER.warning(f"里程 CSV 解析失败 ({csv_path}): {exc}")
         return None
 
 
@@ -193,34 +183,38 @@ def get_frame_mileage(video_path, f_num, start_t, fps, m_map):
         dt_total = (t1 - t0).value
         dt_frame = (t_target - t0).value
         return round(m0 + (m1 - m0) * (dt_frame / dt_total) if dt_total > 0 else m0, 4)
-    except:
+    except (TypeError, ValueError, IndexError) as exc:
+        LOGGER.warning(f"里程插值失败 (frame {f_num}): {exc}")
         return None
 
 
 def save_frames(video_path, output_folder, interval=None):
     print(f"\n[步骤 1] 视频抽帧处理")
     os.makedirs(output_folder, exist_ok=True)
-    try:
-        conf = read_config('config.txt')
-    except:
-        conf = {}
-    if interval is None: interval = conf.get('interval', 1000)
+    if interval is None:
+        interval = 1000
 
-    # 简单缓存检查
+    video_path = os.path.abspath(video_path)
     info_file = os.path.join(output_folder, 'extraction_info.txt')
     if os.path.exists(info_file):
         try:
-            with open(info_file, 'r') as f:
+            with open(info_file, 'r', encoding='utf-8') as f:
                 cache_info = json.load(f)
-                if cache_info.get('video_path') == video_path and cache_info.get('interval') == interval:
-                    files = glob.glob(os.path.join(output_folder, 'frame_*.png'))
-                    if files:
-                        cap = cv2.VideoCapture(video_path)
-                        w, h, fps = int(cap.get(3)), int(cap.get(4)), cap.get(5)
-                        cap.release()
-                        print(f"[INFO] 命中缓存，跳过抽帧。")
-                        return len(files), w, h, fps
-        except:
+            video_stat = os.stat(video_path)
+            if (
+                cache_info.get('video_path') == video_path
+                and cache_info.get('interval') == interval
+                and cache_info.get('video_mtime') == video_stat.st_mtime
+                and cache_info.get('video_size') == video_stat.st_size
+            ):
+                files = glob.glob(os.path.join(output_folder, 'frame_*.png'))
+                if files:
+                    cap = cv2.VideoCapture(video_path)
+                    w, h, fps = int(cap.get(3)), int(cap.get(4)), cap.get(5)
+                    cap.release()
+                    print(f"[INFO] 命中缓存，跳过抽帧。")
+                    return len(files), w, h, fps
+        except (OSError, json.JSONDecodeError, KeyError):
             pass
 
     for f in glob.glob(os.path.join(output_folder, 'frame_*.png')): os.remove(f)
@@ -238,8 +232,18 @@ def save_frames(video_path, output_folder, interval=None):
         cnt += 1
     cap.release()
     print("\n[INFO] 抽帧完成。")
-    with open(info_file, 'w') as f:
-        json.dump({'video_path': video_path, 'interval': interval}, f)
+    try:
+        video_stat = os.stat(video_path)
+        cache_info = {
+            'video_path': video_path,
+            'interval': interval,
+            'video_mtime': video_stat.st_mtime,
+            'video_size': video_stat.st_size,
+        }
+    except OSError:
+        cache_info = {'video_path': video_path, 'interval': interval}
+    with open(info_file, 'w', encoding='utf-8') as f:
+        json.dump(cache_info, f)
     return saved, w, h, fps
 
 
@@ -259,7 +263,7 @@ def filter_valid_frames(video_path, frame_dir, csv_path, fps):
             m_abs = get_frame_mileage(video_path, n, start_time, fps, m_map)
             if m_abs is not None:
                 valid.append((p, m_abs, m_abs - start_mileage_abs))
-        except:
+        except (ValueError, IndexError):
             continue
     print(f"[INFO] 有效同步帧数: {len(valid)}")
     return valid
@@ -352,58 +356,68 @@ def save_defect_screenshot(img, bbox, defect_info, output_dir):
     return None
 
 
-def process_best_defects(best_defects, result_dir, pipe_params, device='cpu'):
+@lru_cache(maxsize=64)
+def _load_frame_cached(frame_path: str):
+    """LRU 缓存的帧加载器，防止处理长视频时内存无限增长。"""
+    return cv2.imread(frame_path)
+
+
+def process_best_defects(best_defects, result_dir, pipe_params, device='cpu', output_dir=None, use_depth=True):
     print(f"\n[步骤 4] 分析与导出")
     if not best_defects: print("未发现病害"); return
     pipe_inner, pipe_outer, seg_len, start_seg = pipe_params
     final_res = []
     rec_id = 1
-    frame_cache = {}
 
     shot_dir = "defect_screenshots"
 
-    def load_frame(frame_path):
-        if frame_path not in frame_cache:
-            frame_cache[frame_path] = cv2.imread(frame_path)
-        return frame_cache[frame_path]
-
     for seg_idx, defects in sorted(best_defects.items()):
-        for m_type, d in sorted(defects.items(), key=lambda x: x[1]['frame_path']):
-            curr_img = load_frame(d['frame_path'])
-            if curr_img is None: continue
+        # 按帧路径分组，同一帧只做一次深度推理
+        frame_groups = {}
+        for m_type, d in defects.items():
+            frame_groups.setdefault(d['frame_path'], []).append((m_type, d))
 
-            depth = get_defect_center_depth(curr_img, d['bbox_center'])
+        for frame_path, items in frame_groups.items():
+            curr_img = _load_frame_cached(frame_path)
+            if curr_img is None:
+                continue
 
-            # 修改：计算节内里程（管节内的相对位置）
-            # absolute_mileage 是从视频起点开始的累积距离
-            # 计算这个距离在当前管节内的位置（0 ~ seg_len）
-            segment_relative_mileage = d['absolute_mileage'] % seg_len
+            depth_map = get_frame_depth_map(curr_img) if use_depth else None
 
-            # 加上沿管道方向的偏移量
-            final_segment_mileage = segment_relative_mileage + calculate_along_pipe_distance(depth, pipe_inner / 2)
+            for m_type, d in items:
+                if use_depth and depth_map is not None:
+                    x, y = int(d['bbox_center'][0]), int(d['bbox_center'][1])
+                    dh, dw = depth_map.shape
+                    depth = float(depth_map[min(y, dh - 1), min(x, dw - 1)])
+                else:
+                    depth = None
 
-            # 确保不超过管节长度
-            final_segment_mileage = min(final_segment_mileage, seg_len)
+                # 计算节内里程（管节内的相对位置）
+                segment_relative_mileage = d['absolute_mileage'] % seg_len
+                final_segment_mileage = segment_relative_mileage + calculate_along_pipe_distance(depth, pipe_inner / 2)
+                final_segment_mileage = min(final_segment_mileage, seg_len)
 
-            info = {
-                '编号': rec_id, '模型类型': d['model_type'], '严重等级': str(d['severity_val']),
-                '管节序号': seg_idx, '管节内径': pipe_inner, '管节外径': pipe_outer,
-                '管节长度': seg_len, '节内里程': round(final_segment_mileage, 3),
-                '病害长': d['length'], '病害宽': d['width']
-            }
-            s_path = save_defect_screenshot(curr_img, d['bbox'], info, shot_dir)
-            if s_path:
-                info['数据截图'] = s_path
-                final_res.append(info)
-                rec_id += 1
+                info = {
+                    '编号': rec_id, '模型类型': d['model_type'], '严重等级': str(d['severity_val']),
+                    '管节序号': seg_idx, '管节内径': pipe_inner, '管节外径': pipe_outer,
+                    '管节长度': seg_len, '节内里程': round(final_segment_mileage, 3),
+                    '病害长': d['length'], '病害宽': d['width']
+                }
+                s_path = save_defect_screenshot(curr_img, d['bbox'], info, shot_dir)
+                if s_path:
+                    info['数据截图'] = s_path
+                    final_res.append(info)
+                    rec_id += 1
 
     if final_res:
         out_dir = Path(ROOT / 'runs/detect' / result_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(final_res).to_csv(out_dir / 'defect_results_full.csv', index=False, encoding='utf-8-sig')
 
-        #再保存一份到运行目录下
-        pd.DataFrame(final_res).to_csv('./defect_results_full.csv', index=False, encoding='utf-8-sig')
+        # 额外保存一份到指定输出目录（默认项目根目录）
+        csv_output_dir = Path(output_dir) if output_dir else ROOT
+        csv_output_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(final_res).to_csv(csv_output_dir / 'defect_results_full.csv', index=False, encoding='utf-8-sig')
 
         print(f"导出完成: {out_dir / 'defect_results_full.csv'}")
 
@@ -439,7 +453,7 @@ def run(config_path, visual_callback=None):
 
     pipe_params = (conf['inner'], conf['outer'], conf['length'], conf['segment'])
     best = filter_best_defects(valid, w, h, pipe_params, device=device, visual_callback=visual_callback)
-    process_best_defects(best, result_dir, pipe_params, device=device)
+    process_best_defects(best, result_dir, pipe_params, device=device, output_dir=ROOT)
 
 
 if __name__ == '__main__':

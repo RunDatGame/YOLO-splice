@@ -17,6 +17,11 @@ model_mode: library
 video:
 raw:
 
+# ================= 深度估计开关 =================
+# true: 启用 Depth Anything V2 深度估计（默认）
+# false: 跳过深度估计，节内里程不包含沿管偏移
+use_depth: true
+
 # ================= 管道物理参数 =================
 inner: 0.54
 outer: 0.60

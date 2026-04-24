@@ -35,6 +35,7 @@ class PipelineConfig:
     length: float
     segment: int
     interval: int
+    use_depth: bool = True
 
 
 @dataclass(frozen=True)
