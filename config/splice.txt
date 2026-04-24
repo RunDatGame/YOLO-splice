@@ -3,10 +3,10 @@
 blender_path: ./blender/blender.exe
 
 # 缺陷模型库文件夹
-dataset_path: ./assets/排水管道内缺陷模型库1.0
+dataset_path: ./排水管道内缺陷模型库1.0
 
 # 井室模型文件
-manhole_path: ./assets/排水管道井室模板库1.0/标准矩形井室0.6.glb
+manhole_path: ./排水管道井室模板库1.0/标准矩形井室0.6.glb
 
 # ================= 三维建模模式 =================
 # library: 缺陷模型库拼接（本项目主路径）
