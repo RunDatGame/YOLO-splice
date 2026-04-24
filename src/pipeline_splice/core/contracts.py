@@ -36,6 +36,11 @@ class PipelineConfig:
     segment: int
     interval: int
     use_depth: bool = True
+    default_model: str = "QKG"
+    skip_ck: bool = True
+    one_model_per_segment: bool = True
+    global_x_offset: float = -2.0
+    manhole_half_length: float = 2.0
 
 
 @dataclass(frozen=True)

@@ -22,6 +22,20 @@ raw:
 # false: 跳过深度估计，节内里程不包含沿管偏移
 use_depth: true
 
+# ================= 模型匹配参数 =================
+# 模型文件名前缀（如 QKG / CCG）
+default_model: QKG
+# true: 跳过错口(CK)模型匹配（默认）
+skip_ck: true
+# true: 每管节只保留一个匹配模型（默认）
+one_model_per_segment: true
+
+# ================= Blender 拼接参数 =================
+# 全局原点偏移 (X轴)，用于对齐井室和管道起点
+global_x_offset: -2.0
+# 井室半长，用于计算结束井室位置
+manhole_half_length: 2.0
+
 # ================= 管道物理参数 =================
 inner: 0.54
 outer: 0.60

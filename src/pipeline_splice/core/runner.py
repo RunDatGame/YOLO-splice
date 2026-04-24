@@ -7,7 +7,6 @@ from .config import (
     build_task_paths,
     load_pipeline_config,
     normalize_model_mode,
-    update_task_inputs,
     validate_detection_config,
     validate_runtime_config,
 )
@@ -34,7 +33,6 @@ def _build_runtime(
 ):
     task = build_task_input(csv_path, video_path, work_dir)
     runtime_config_path = Path(config_path).resolve() if config_path else task.work_dir / "config.txt"
-    update_task_inputs(runtime_config_path, task.video_path, task.csv_path)
 
     normalized_mode = normalize_model_mode(model_mode)
     config = load_pipeline_config(runtime_config_path, task, model_mode_override=normalized_mode)

@@ -197,6 +197,11 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
     meshroom_default_fov = float(raw_config.get("meshroom_default_fov", 45.0))
     meshroom_depth_downscale = int(raw_config.get("meshroom_depth_downscale", 2))
     use_depth = str(raw_config.get("use_depth", "true")).strip().lower() not in ("false", "0", "no", "off")
+    default_model = str(raw_config.get("default_model", "QKG")).strip() or "QKG"
+    skip_ck = str(raw_config.get("skip_ck", "true")).strip().lower() not in ("false", "0", "no", "off")
+    one_model_per_segment = str(raw_config.get("one_model_per_segment", "true")).strip().lower() not in ("false", "0", "no", "off")
+    global_x_offset = float(raw_config.get("global_x_offset", -2.0))
+    manhole_half_length = float(raw_config.get("manhole_half_length", 2.0))
 
     return PipelineConfig(
         config_path=config_path,
@@ -221,6 +226,11 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
         segment=int(raw_config["segment"]),
         interval=int(raw_config["interval"]),
         use_depth=use_depth,
+        default_model=default_model,
+        skip_ck=skip_ck,
+        one_model_per_segment=one_model_per_segment,
+        global_x_offset=global_x_offset,
+        manhole_half_length=manhole_half_length,
     )
 
 

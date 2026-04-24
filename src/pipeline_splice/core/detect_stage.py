@@ -9,12 +9,13 @@ from .contracts import DetectArtifacts, PipelineConfig
 
 def run_detection_stage(
     config: PipelineConfig,
+    work_dir: Path,
     visual_callback=None,
     output_dir: Path | None = None,
 ) -> DetectArtifacts:
     video_path = str(config.video_path)
     result_dir = Path(video_path).stem
-    frame_dir = Path(detect_engine.ROOT / "runs" / "detect" / result_dir / "frames")
+    frame_dir = work_dir / "runs" / "detect" / result_dir / "frames"
 
     count, width, height, fps = detect_engine.save_frames(video_path, str(frame_dir), config.interval)
     if not count or not width or not height or not fps:
@@ -43,7 +44,7 @@ def run_detection_stage(
         use_depth=config.use_depth,
     )
 
-    detect_csv_local = detect_engine.ROOT / "runs" / "detect" / result_dir / "defect_results_full.csv"
+    detect_csv_local = work_dir / "defect_results_full.csv"
     if not detect_csv_local.exists():
         raise RuntimeError("检测阶段结束，但未生成 defect_results_full.csv")
 

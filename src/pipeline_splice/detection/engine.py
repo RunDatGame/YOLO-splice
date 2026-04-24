@@ -410,16 +410,11 @@ def process_best_defects(best_defects, result_dir, pipe_params, device='cpu', ou
                     rec_id += 1
 
     if final_res:
-        out_dir = Path(ROOT / 'runs/detect' / result_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(final_res).to_csv(out_dir / 'defect_results_full.csv', index=False, encoding='utf-8-sig')
-
-        # 额外保存一份到指定输出目录（默认项目根目录）
         csv_output_dir = Path(output_dir) if output_dir else ROOT
         csv_output_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(final_res).to_csv(csv_output_dir / 'defect_results_full.csv', index=False, encoding='utf-8-sig')
 
-        print(f"导出完成: {out_dir / 'defect_results_full.csv'}")
+        print(f"导出完成: {csv_output_dir / 'defect_results_full.csv'}")
 
 
 def read_config(path):

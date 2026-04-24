@@ -15,17 +15,17 @@ TYPE_MAP = {
 
 
 def normalize_diameter(d):
-    """ 保证管径 '0.3m' 格式 """
+    """ 保证管径 '0.3m' 格式并去除末尾零 """
     if not d:
         return ""
     d = str(d).strip().lower()
     if d.endswith("m"):
-        return d
+        d = d[:-1]
     try:
-        float(d)
-        return d + "m"
-    except:
-        return d
+        val = float(d)
+        return f"{val:g}m"
+    except ValueError:
+        return d + "m" if d else ""
 
 
 def find_matching_glb(diameter, defect_type, severity, model, all_glb):
@@ -83,7 +83,7 @@ def load_glb_catalog(dataset_dir):
 
 
 # ========== 这是最终暴露给外部使用的函数 ==========
-def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG"):
+def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG", skip_ck=True, one_per_segment=True):
     df = pd.read_csv(input_csv, dtype=str).fillna("")
 
     all_glb, direct_index = load_glb_catalog(os.path.abspath(dataset_dir))
@@ -98,8 +98,7 @@ def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG"):
         defect_code = TYPE_MAP.get(raw_type, raw_type)
         d_match = normalize_diameter(raw_diameter)
 
-        # ---- 错口直接跳过 ----
-        if defect_code.upper() == "CK":
+        if skip_ck and defect_code.upper() == "CK":
             new_paths.append("")
             continue
 
@@ -113,16 +112,13 @@ def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG"):
 
     df["模型路径"] = new_paths
 
-    # ========================================================
-    #   同一管节序号只允许一个匹配，其余全部清空
-    # ========================================================
-    if "管节序号" in df.columns:
+    if one_per_segment and "管节序号" in df.columns:
         for seg_id, group in df.groupby("管节序号"):
             non_empty_idx = group[group["模型路径"] != ""].index.tolist()
             if len(non_empty_idx) > 1:
                 for idx_to_clear in non_empty_idx[1:]:
                     df.at[idx_to_clear, "模型路径"] = ""
-    else:
+    elif one_per_segment:
         print("警告：没有管节序号字段")
 
     df.to_csv(output_csv, index=False, encoding="utf-8-sig")

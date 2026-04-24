@@ -268,7 +268,12 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
 
 
 def run_detect(task: TaskInput, config: PipelineConfig, paths: TaskPaths, visual_callback=None) -> StepResult:
-    artifacts = run_detection_stage(config, visual_callback=visual_callback, output_dir=task.work_dir)
+    artifacts = run_detection_stage(
+        config,
+        work_dir=task.work_dir,
+        visual_callback=visual_callback,
+        output_dir=task.work_dir,
+    )
 
     if not isinstance(artifacts, DetectArtifacts) or not artifacts.detect_csv_local.exists():
         return StepResult("detect", False, "未生成检测 CSV")
@@ -289,7 +294,14 @@ def run_match(config: PipelineConfig, paths: TaskPaths) -> StepResult:
     if config.dataset_path is None:
         return StepResult("match", False, "缺少 dataset_path，无法执行模型匹配")
 
-    process_csv(str(paths.detect_csv_local), str(config.dataset_path), str(paths.matched_csv_output))
+    process_csv(
+        str(paths.detect_csv_local),
+        str(config.dataset_path),
+        str(paths.matched_csv_output),
+        default_model=config.default_model,
+        skip_ck=config.skip_ck,
+        one_per_segment=config.one_model_per_segment,
+    )
     if not paths.matched_csv_output.exists():
         return StepResult("match", False, "未生成匹配 CSV")
     return StepResult("match", True, "模型匹配完成", paths.matched_csv_output)
@@ -378,6 +390,10 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         str(paths.final_glb),
         "--manhole",
         str(config.manhole_path),
+        "--global-x-offset",
+        str(config.global_x_offset),
+        "--manhole-half-length",
+        str(config.manhole_half_length),
     ]
 
     try:

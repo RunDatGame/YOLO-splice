@@ -91,7 +91,7 @@ def place_manhole(filepath, name_prefix, location, rotation_z, main_collection):
 # ==========================================
 # 核心逻辑 (包含井室) (已实现管道平移)
 # ==========================================
-def run_pipeline(csv_path, output_path, manhole_path):
+def run_pipeline(csv_path, output_path, manhole_path, global_x_offset=-2.0, manhole_half_length=2.0):
     print(f"--- 开始处理 ---")
     print(f"CSV文件: {csv_path}")
     print(f"输出路径: {output_path}")
@@ -101,15 +101,11 @@ def run_pipeline(csv_path, output_path, manhole_path):
         print(f"[致命错误] 井室模型文件不存在: {manhole_path}")
         return
 
-    # *** 新的配置：全局原点偏移 ***
-    # 假设井室连接圆孔在模型自身 X=+2.0m 处。
-    # 要将该点设为 X=0，所有物体都需要整体向左平移 2.0m。
-    GLOBAL_X_OFFSET = -2.0
-
-    # 井室的半长，用于计算结束井室的位置。
-    MANHOLE_HALF_LENGTH = 2.0
+    GLOBAL_X_OFFSET = global_x_offset
+    MANHOLE_HALF_LENGTH = manhole_half_length
 
     print(f"[配置] 全局原点偏移 (X轴): {GLOBAL_X_OFFSET:.2f} 米")
+    print(f"[配置] 井室半长: {MANHOLE_HALF_LENGTH:.2f} 米")
 
     # 1. 预处理 CSV 数据 (保持不变)
     segments = []
@@ -272,10 +268,12 @@ if __name__ == "__main__":
         parser.add_argument('--csv', required=True, help='CSV文件路径')
         parser.add_argument('--output', required=True, help='输出GLB路径')
         parser.add_argument('--manhole', required=True, help='井室GLB模型文件路径')
+        parser.add_argument('--global-x-offset', type=float, default=-2.0, help='全局原点偏移 (X轴)')
+        parser.add_argument('--manhole-half-length', type=float, default=2.0, help='井室半长')
 
         args = parser.parse_args(args)
 
-        run_pipeline(args.csv, args.output, args.manhole)
+        run_pipeline(args.csv, args.output, args.manhole, args.global_x_offset, args.manhole_half_length)
 
     except Exception as e:
         # 打印详细错误信息有助于调试
