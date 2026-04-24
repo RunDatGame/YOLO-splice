@@ -1,0 +1,7 @@
+video: ./samples/input/2024-07-31_202835_Front.mp4
+raw: ./samples/input/11.csv
+inner: 0.54
+outer: 0.60
+length: 3.0
+segment: 1
+interval: 100

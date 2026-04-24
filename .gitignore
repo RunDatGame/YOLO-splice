@@ -1,0 +1,89 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ==========================================
+# 项目特定大文件/目录
+# ==========================================
+
+# Blender 程序目录（体积巨大）
+blender/
+
+# 缺陷模型库与井室模板（大量 GLB 文件，由用户自行放置）
+assets/排水管道内缺陷模型库1.0/
+assets/排水管道井室模板库1.0/
+
+# 大型权重文件（由用户自行放置）
+weights/*.pt
+weights/*.pth
+checkpoints/*.pth
+checkpoints/*.pt
+
+# 运行产物
+runs/
+outputs/
+data/output/
+data/test_imgs/
+
+# 本地配置覆盖
+config.local.yaml
+config.local.txt
+
+# 大型示例文件
+samples/input/*.mp4
+samples/input/*.avi
+samples/input/*.mov
+samples/input/*.mkv

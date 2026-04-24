@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pipeline-splice"
+version = "0.1.0"
+description = "Drainage pipe defect detection and 3D model splicing pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "fjz"}
+]
+dependencies = [
+    "numpy>=1.26,<3.0",
+    "pandas>=2.2,<3.0",
+    "opencv-python>=4.10,<5.0",
+    "Pillow>=10.0,<12.0",
+    "PyYAML>=6.0,<7.0",
+    "requests>=2.31,<3.0",
+    "psutil>=5.9,<6.0",
+    "tqdm>=4.66,<5.0",
+    "matplotlib>=3.8,<4.0",
+    "seaborn>=0.13,<1.0",
+    "watchdog>=4.0,<7.0",
+    "trimesh>=4.0,<5.0",
+    "pygltflib>=1.16,<2.0",
+    "PySide6>=6.8,<7.0",
+    "torch",
+    "torchvision",
+]
+
+[project.scripts]
+pipeline-splice = "pipeline_splice.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["pipeline_splice*"]

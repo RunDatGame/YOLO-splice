@@ -1,0 +1,29 @@
+# Shared runtime dependencies
+blender_path: ./blender/blender.exe
+dataset_path: ./排水管道内缺陷模型库1.0
+manhole_path: ./排水管道井室模板库1.0/标准矩形井室0.6.glb
+
+# Method mode
+model_mode: reconstruction
+
+# Reconstruction options
+reconstruction_command:
+reconstruction_mesh:
+reconstruction_scale_target: inner
+meshroom_path: G:/Meshroom-2023.3.0/Meshroom.exe
+meshroom_describer_types: sift,akaze
+meshroom_describer_preset: normal
+meshroom_match_method: SequentialAndVocabularyTree
+meshroom_default_fov: 45
+meshroom_depth_downscale: 2
+
+# Default sample input
+video: ./samples/input/2024-07-31_202835_Front.mp4
+raw: ./samples/input/11.csv
+
+# Pipe parameters
+inner: 0.54
+outer: 0.60
+length: 3.0
+segment: 1
+interval: 100

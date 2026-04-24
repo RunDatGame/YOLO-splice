@@ -1,0 +1,25 @@
+# ================= 环境路径配置 =================
+# Blender 可执行文件路径（相对项目根目录）
+blender_path: ./blender/blender.exe
+
+# 缺陷模型库文件夹
+dataset_path: ./assets/排水管道内缺陷模型库1.0
+
+# 井室模型文件
+manhole_path: ./assets/排水管道井室模板库1.0/标准矩形井室0.6.glb
+
+# ================= 三维建模模式 =================
+# library: 缺陷模型库拼接（本项目主路径）
+# reconstruction: 三维重建（保留兼容）
+model_mode: library
+
+# ================= 任务动态参数 =================
+video:
+raw:
+
+# ================= 管道物理参数 =================
+inner: 0.54
+outer: 0.60
+length: 3.0
+segment: 1
+interval: 100
