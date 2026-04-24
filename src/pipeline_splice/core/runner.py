@@ -63,7 +63,7 @@ def prepare_detection(
     print("检测阶段启动")
     print(f"视频路径: {task.video_path}")
     print(f"输出目录: {task.output_dir}")
-    print("✓ Config 已更新")
+    print("[OK] Config 已更新")
     print(">>> [1/1] 运行 DetectV1...")
     detect_step = run_detect(task, config, paths, visual_callback=visual_callback)
     result.steps.append(detect_step)
@@ -71,7 +71,7 @@ def prepare_detection(
         print(detect_step.details)
         print("=" * 40)
         return result
-    print("✓ 检测阶段完成")
+    print("[OK] 检测阶段完成")
     print("=" * 40)
     return result
 
@@ -99,7 +99,7 @@ def process_task(
     print("任务启动")
     print(f"视频路径: {task.video_path}")
     print(f"输出目录: {task.output_dir}")
-    print("✓ Config 已更新")
+    print("[OK] Config 已更新")
     print(f"建模方式: {'拼接模型' if config.model_mode == 'library' else '三维重建算法'}")
 
     if reuse_detection:
@@ -146,11 +146,11 @@ def process_task(
     print(f"目标文件: {paths.final_glb}")
     export_step = run_export(task, config, paths, source_mesh=source_mesh)
     result.steps.append(export_step)
-    print("✓ GLB 生成成功" if export_step.success else f"✗ {export_step.details}")
+    print("[OK] GLB 生成成功" if export_step.success else f"[FAIL] {export_step.details}")
 
     info_step = write_info_file(config, paths, source_mesh=source_mesh)
     result.steps.append(info_step)
-    print(f"✓ 信息文件生成: {paths.info_txt}")
+    print(f"[OK] 信息文件生成: {paths.info_txt}")
     print("=" * 40)
     return result
 
@@ -239,6 +239,6 @@ def process_reconstruction_only(
 
     info_step = write_info_file(config, paths, source_mesh=source_mesh)
     result.steps.append(info_step)
-    print(f"✓ 信息文件生成: {paths.info_txt}")
+    print(f"[OK] 信息文件生成: {paths.info_txt}")
     print("=" * 40)
     return result
