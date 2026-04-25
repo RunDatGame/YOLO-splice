@@ -29,7 +29,15 @@ $PyInstallerArgs = @(
     "--hidden-import", "pipeline_splice.uv.runner",
     "--hidden-import", "pipeline_splice.uv.texture_builder",
     "--hidden-import", "pipeline_splice.core.config",
+    "--hidden-import", "pipeline_splice.core.detect_stage",
+    "--hidden-import", "pipeline_splice.core.contracts",
+    "--hidden-import", "pipeline_splice.detection.engine",
     "--hidden-import", "pipeline_splice.detection.mileage",
+    "--hidden-import", "pipeline_splice.detection.frames",
+    "--hidden-import", "pipeline_splice.detection.detector",
+    "--hidden-import", "pipeline_splice.detection._common",
+    "--hidden-import", "pipeline_splice.detection.export",
+    "--hidden-import", "pipeline_splice.detection.depth",
     "--hidden-import", "pandas",
     "--hidden-import", "numpy",
     "--hidden-import", "cv2",
@@ -49,14 +57,24 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "打包完成，输出目录: $DistDir\PipelineWatcher" -ForegroundColor Green
 
+# 复制 config/ 到输出目录（exe 同级目录，供程序读取）
+Copy-Item -Recurse -Force "$ProjectRoot\config" "$DistDir\PipelineWatcher\config" -ErrorAction SilentlyContinue
+
 # 复制 task_list.txt 模板到输出目录
 Copy-Item -Force "$ProjectRoot\task_list.txt" "$DistDir\PipelineWatcher\task_list.txt" -ErrorAction SilentlyContinue
 if (-not (Test-Path "$DistDir\PipelineWatcher\task_list.txt")) {
     New-Item -ItemType File -Path "$DistDir\PipelineWatcher\task_list.txt" | Out-Null
 }
 
+# 创建 video_Config.txt 模板（供外部读取管外径和模式）
+$defaultOuter = "0.6"
+$templateContent = "管节外径: $defaultOuter`n建模模式: uv_texture`n"
+$templateContent | Out-File -FilePath "$DistDir\PipelineWatcher\video_Config.txt" -Encoding UTF8 -NoNewline
+
+Write-Host "配置文件已就绪。" -ForegroundColor Green
 Write-Host "打包产物已就绪。" -ForegroundColor Green
 Write-Host "使用方法:" -ForegroundColor Yellow
 Write-Host "  1. 双击 PipelineWatcher.exe 启动守护进程" -ForegroundColor Gray
 Write-Host "  2. 向 task_list.txt 写入任务行: ./xxx.csv ./xxx.mp4" -ForegroundColor Gray
 Write-Host "  3. 输出结果在 outputs/uv_texture/ 目录下" -ForegroundColor Gray
+Write-Host "  4. video_Config.txt 包含管节外径和模式信息（供外部读取）" -ForegroundColor Gray
