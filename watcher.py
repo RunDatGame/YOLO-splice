@@ -84,10 +84,11 @@ def handle_task(csv_path: str, video_path: str) -> bool:
     csv_path = csv_path.strip().strip('"').strip("'")
     video_path = video_path.strip().strip('"').strip("'")
 
-    print(f"\n[Watcher] 新任务启动:")
+    video_dir = Path(video_path).parent.resolve()
+    print(f"\n[Watcher] New task:")
     print(f"  CSV: {csv_path}")
     print(f"  MP4: {video_path}")
-    print(f"  WorkDir: {BASE_DIR}")
+    print(f"  OutputDir: {video_dir}")
 
     config_path = DEFAULT_CONFIG if DEFAULT_CONFIG.exists() else None
 
@@ -95,7 +96,7 @@ def handle_task(csv_path: str, video_path: str) -> bool:
         process_task(
             csv_path=csv_path,
             video_path=video_path,
-            work_dir=BASE_DIR,
+            work_dir=video_dir,
             config_path=config_path,
         )
         logging.info("任务执行完成")
@@ -137,15 +138,15 @@ def process_task_list(txt_path: Path):
 def main():
     if not WATCH_FILE.exists():
         WATCH_FILE.write_text("", encoding="utf-8")
-        print(f"已创建监听文件: {WATCH_FILE}")
+        print(f"Created watch file: {WATCH_FILE}")
 
     observer = Observer()
     handler = TaskFileHandler()
     observer.schedule(handler, str(BASE_DIR), recursive=False)
     observer.start()
 
-    print(f"PipelineWatcher (UV 模式) 正在监听: {WATCH_FILE}")
-    print("请在文件中输入: ./xxx.csv ./xxx.mp4")
+    print(f"PipelineWatcher (UV mode) watching: {WATCH_FILE}")
+    print("Enter in file: ./xxx.csv ./xxx.mp4")
 
     try:
         if WATCH_FILE.stat().st_size > 0:

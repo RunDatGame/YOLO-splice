@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
-$DistDir = "E:\YOLO-splice-package\dist"
+$DistDir = "E:\YOLO-splice-package\dist-uv"
 
 # 确保输出目录存在
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
