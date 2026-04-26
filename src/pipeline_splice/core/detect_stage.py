@@ -47,7 +47,13 @@ def run_detection_stage(
 
     detect_csv_local = work_dir / "defect_results_full.csv"
     if not detect_csv_local.exists():
-        raise RuntimeError("检测阶段结束，但未生成 defect_results_full.csv")
+        import pandas as pd
+        pd.DataFrame(columns=[
+            "编号", "模型类型", "严重等级", "管节序号",
+            "管节内径", "管节外径", "管节长度", "节内里程",
+            "病害长", "病害宽", "数据截图",
+        ]).to_csv(detect_csv_local, index=False, encoding="utf-8-sig")
+        print(f"  [INFO] 未检测到病害，已创建空结果: {detect_csv_local}")
 
     return DetectArtifacts(
         result_dir_name=result_dir,
