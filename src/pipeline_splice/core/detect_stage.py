@@ -43,15 +43,19 @@ def run_detection_stage(
         device=detect_engine.device,
         output_dir=output_dir,
         use_depth=config.use_depth,
+        wall_thickness=config.wall_thickness,
+        rebar_spacing=config.rebar_spacing,
     )
 
     detect_csv_local = work_dir / "defect_results_full.csv"
     if not detect_csv_local.exists():
         import pandas as pd
         pd.DataFrame(columns=[
-            "编号", "模型类型", "严重等级", "管节序号",
-            "管节内径", "管节外径", "管节长度", "节内里程",
-            "病害长", "病害宽", "数据截图",
+            "编号", "模型类型", "管节序号",
+            "管节内径", "管节外径", "管节长度", "管道壁厚", "钢筋间距",
+            "节内里程", "偏移距", "轴线偏角",
+            "病害长", "病害宽", "病害高",
+            "严重等级", "模型路径", "数据截图",
         ]).to_csv(detect_csv_local, index=False, encoding="utf-8-sig")
         print(f"  [INFO] 未检测到病害，已创建空结果: {detect_csv_local}")
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .contracts import PipelineConfig, TaskInput, TaskPaths
 
-FLOAT_KEYS = {"inner", "outer", "length", "meshroom_default_fov"}
+FLOAT_KEYS = {"inner", "outer", "length", "meshroom_default_fov", "wall_thickness", "rebar_spacing"}
 INT_KEYS = {"segment", "interval", "meshroom_depth_downscale"}
 MODEL_MODE_ALIASES = {
     "library": "library",
@@ -166,7 +166,7 @@ def build_task_paths(task: TaskInput, model_mode: str) -> TaskPaths:
         detect_csv_output=mode_dir / "defect_results_full.csv",
         matched_csv_output=mode_dir / f"detect_results_matched_{mode_tag}.csv",
         reconstruction_dir=mode_dir / "meshroom_reconstruction",
-        final_glb=mode_dir / f"pipeline_{mode_tag}.glb",
+        final_glb=mode_dir / "pipeline_In.glb",
         info_txt=mode_dir / f"video_Config_{mode_tag}.txt",
         mode_tag=mode_tag,
     )
@@ -180,6 +180,12 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
     dataset_path = resolve_path(work_dir, raw_config.get("dataset_path"))
     meshroom_path = normalize_meshroom_path(resolve_path(work_dir, raw_config.get("meshroom_path")))
     manhole_path = resolve_path(work_dir, raw_config.get("manhole_path"))
+    # 权重路径默认指向打包在 _internal 内的资源（通过 get_runtime_dir 解析）
+    runtime_dir = get_runtime_dir()
+    yolo_weights_raw = raw_config.get("yolo_weights")
+    depth_weights_raw = raw_config.get("depth_weights")
+    yolo_weights = resolve_path(runtime_dir, yolo_weights_raw) if yolo_weights_raw else (runtime_dir / "weights" / "best.pt")
+    depth_weights = resolve_path(runtime_dir, depth_weights_raw) if depth_weights_raw else (runtime_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth")
 
     video_path = resolve_path(work_dir, raw_config.get("video")) or task.video_path
     raw_csv_path = resolve_path(work_dir, raw_config.get("raw")) or task.csv_path
@@ -221,11 +227,15 @@ def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override
         meshroom_default_fov=meshroom_default_fov,
         meshroom_depth_downscale=meshroom_depth_downscale,
         manhole_path=manhole_path,
+        yolo_weights=yolo_weights,
+        depth_weights=depth_weights,
         inner=float(raw_config["inner"]),
         outer=float(raw_config["outer"]),
         length=float(raw_config["length"]),
         segment=int(raw_config["segment"]),
         interval=int(raw_config["interval"]),
+        wall_thickness=float(raw_config.get("wall_thickness", 0.1)),
+        rebar_spacing=float(raw_config.get("rebar_spacing", 0.0)),
         use_depth=use_depth,
         default_model=default_model,
         skip_ck=skip_ck,
@@ -241,10 +251,10 @@ def validate_runtime_config(config: PipelineConfig, task: TaskInput) -> None:
         "视频文件": task.video_path,
         "里程 CSV": task.csv_path,
         "Blender": config.blender_path,
-        "YOLO 权重": task.work_dir / "weights" / "best.pt",
+        "YOLO 权重": config.yolo_weights,
     }
     if config.use_depth:
-        common_required["深度权重"] = task.work_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth"
+        common_required["深度权重"] = config.depth_weights
 
     if config.model_mode == "library":
         common_required["缺陷模型库"] = config.dataset_path
@@ -268,10 +278,10 @@ def validate_detection_config(config: PipelineConfig, task: TaskInput) -> None:
     required = {
         "视频文件": task.video_path,
         "里程 CSV": task.csv_path,
-        "YOLO 权重": task.work_dir / "weights" / "best.pt",
+        "YOLO 权重": config.yolo_weights,
     }
     if config.use_depth:
-        required["深度权重"] = task.work_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth"
+        required["深度权重"] = config.depth_weights
     missing = [f"{name}: {path}" for name, path in required.items() if path is None or not path.exists()]
     if missing:
         raise FileNotFoundError("检测阶段所需文件缺失:\n" + "\n".join(missing))

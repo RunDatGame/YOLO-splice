@@ -35,6 +35,10 @@ class PipelineConfig:
     length: float
     segment: int
     interval: int
+    yolo_weights: Path | None = None
+    depth_weights: Path | None = None
+    wall_thickness: float = 0.1
+    rebar_spacing: float = 0.0
     use_depth: bool = True
     default_model: str = "QKG"
     skip_ck: bool = True

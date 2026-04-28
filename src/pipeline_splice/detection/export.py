@@ -1,10 +1,13 @@
 import os
+from datetime import datetime
 from pathlib import Path
 
 import cv2
 import pandas as pd
 
 from ._common import ROOT
+
+_defect_id_counter = 0
 
 
 def save_defect_screenshot(img, bbox, defect_info, output_dir):
@@ -26,7 +29,14 @@ def save_defect_screenshot(img, bbox, defect_info, output_dir):
     return None
 
 
-def process_best_defects(best_defects, result_dir, pipe_params, device="cpu", output_dir=None, use_depth=True):
+def generate_defect_id() -> str:
+    global _defect_id_counter
+    _defect_id_counter += 1
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]
+    return f"InerDis{timestamp}{_defect_id_counter:03d}"
+
+
+def process_best_defects(best_defects, result_dir, pipe_params, device="cpu", output_dir=None, use_depth=True, wall_thickness=0.1, rebar_spacing=0.0):
     from .depth import calculate_along_pipe_distance, get_frame_depth_map
     from .frames import _load_frame_cached
 
@@ -36,7 +46,6 @@ def process_best_defects(best_defects, result_dir, pipe_params, device="cpu", ou
         return
     pipe_inner, pipe_outer, seg_len, start_seg = pipe_params
     final_res = []
-    rec_id = 1
 
     shot_dir = "defect_screenshots"
 
@@ -67,24 +76,41 @@ def process_best_defects(best_defects, result_dir, pipe_params, device="cpu", ou
                 final_segment_mileage = min(final_segment_mileage, seg_len)
 
                 info = {
-                    "编号": rec_id,
+                    "编号": generate_defect_id(),
                     "模型类型": d["model_type"],
-                    "严重等级": str(d["severity_val"]),
                     "管节序号": seg_idx,
                     "管节内径": pipe_inner,
                     "管节外径": pipe_outer,
                     "管节长度": seg_len,
+                    "管道壁厚": wall_thickness,
+                    "钢筋间距": rebar_spacing,
                     "节内里程": round(final_segment_mileage, 3),
+                    "偏移距": d.get("offset", ""),
+                    "轴线偏角": d.get("axis_angle", ""),
                     "病害长": d["length"],
                     "病害宽": d["width"],
+                    "病害高": d.get("height", ""),
+                    "严重等级": str(d["severity_val"]),
+                    "模型路径": "",
+                    "数据截图": "",
                 }
                 s_path = save_defect_screenshot(curr_img, d["bbox"], info, shot_dir)
                 if s_path:
                     info["数据截图"] = s_path
-                    final_res.append(info)
-                    rec_id += 1
+                final_res.append(info)
 
     if final_res:
+        # 每管节只保留严重等级最高的2个病害
+        seg_groups = {}
+        for d in final_res:
+            sid = d.get("管节序号", 0)
+            seg_groups.setdefault(sid, []).append(d)
+        filtered = []
+        for sid, items in seg_groups.items():
+            items.sort(key=lambda x: (int(str(x.get("严重等级", "1"))), float(str(x.get("病害长", 0))) * float(str(x.get("病害宽", 0)))), reverse=True)
+            filtered.extend(items[:2])
+        final_res = filtered
+
         csv_output_dir = Path(output_dir) if output_dir else ROOT
         csv_output_dir.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(final_res).to_csv(

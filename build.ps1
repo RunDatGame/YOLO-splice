@@ -1,21 +1,21 @@
-# build.ps1 - PyInstaller 打包脚本 (UV 模式)
-# 在 YOLO conda 环境中运行: conda activate YOLO; .\build.ps1
+# build.ps1 - PyInstaller packaging script (UV mode)
+# Run in YOLO conda env: conda activate YOLO; .\build.ps1
 
 $ErrorActionPreference = "Stop"
 $ProjectRoot = $PSScriptRoot
 $DistDir = "E:\YOLO-splice-package\dist-uv"
 
-# 确保输出目录存在
+# Ensure output dir exists
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
-# 清理旧的构建缓存
+# Clean old build cache
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$ProjectRoot\build"
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$ProjectRoot\dist"
 
-Write-Host "开始打包 PipelineWatcher (UV 模式)..." -ForegroundColor Cyan
-Write-Host "项目根目录: $ProjectRoot" -ForegroundColor Gray
+Write-Host "Building PipelineWatcher (UV mode)..." -ForegroundColor Cyan
+Write-Host "Project root: $ProjectRoot" -ForegroundColor Gray
 
-# 构建 PyInstaller 命令
+# Build PyInstaller command
 $PyInstallerArgs = @(
     "--onedir",
     "--name", "PipelineWatcher",
@@ -26,6 +26,8 @@ $PyInstallerArgs = @(
     "--paths", "$ProjectRoot",
     "--add-data", "data;data",
     "--add-data", "config;config",
+    "--add-data", "weights;weights",
+    "--add-data", "checkpoints;checkpoints",
     "--hidden-import", "pipeline_splice.uv.runner",
     "--hidden-import", "pipeline_splice.uv.texture_builder",
     "--hidden-import", "pipeline_splice.core.config",
@@ -51,30 +53,30 @@ $PyInstallerArgs = @(
 & "C:\Users\Administrator\.conda\envs\YOLO\Scripts\pyinstaller.exe" @PyInstallerArgs
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "打包失败，返回码: $LASTEXITCODE" -ForegroundColor Red
+    Write-Host "Build failed, exit code: $LASTEXITCODE" -ForegroundColor Red
     exit 1
 }
 
-Write-Host "打包完成，输出目录: $DistDir\PipelineWatcher" -ForegroundColor Green
+Write-Host "Build complete. Output: $DistDir\PipelineWatcher" -ForegroundColor Green
 
-# 复制 config/ 到输出目录（exe 同级目录，供程序读取）
+# Copy config/ to output dir (exe-level, for program to read)
 Copy-Item -Recurse -Force "$ProjectRoot\config" "$DistDir\PipelineWatcher\config" -ErrorAction SilentlyContinue
 
-# 复制 task_list.txt 模板到输出目录
+# Copy task_list.txt template to output dir
 Copy-Item -Force "$ProjectRoot\task_list.txt" "$DistDir\PipelineWatcher\task_list.txt" -ErrorAction SilentlyContinue
 if (-not (Test-Path "$DistDir\PipelineWatcher\task_list.txt")) {
     New-Item -ItemType File -Path "$DistDir\PipelineWatcher\task_list.txt" | Out-Null
 }
 
-# 创建 video_Config.txt 模板（供外部读取管外径和模式）
+# Create video_Config.txt template (for external use)
 $defaultOuter = "0.6"
 $templateContent = "管节外径: $defaultOuter`n建模模式: uv_texture`n"
 $templateContent | Out-File -FilePath "$DistDir\PipelineWatcher\video_Config.txt" -Encoding UTF8 -NoNewline
 
-Write-Host "配置文件已就绪。" -ForegroundColor Green
-Write-Host "打包产物已就绪。" -ForegroundColor Green
-Write-Host "使用方法:" -ForegroundColor Yellow
-Write-Host "  1. 双击 PipelineWatcher.exe 启动守护进程" -ForegroundColor Gray
-Write-Host "  2. 向 task_list.txt 写入任务行: ./xxx.csv ./xxx.mp4" -ForegroundColor Gray
-Write-Host "  3. 输出结果在 outputs/uv_texture/ 目录下" -ForegroundColor Gray
-Write-Host "  4. video_Config.txt 包含管节外径和模式信息（供外部读取）" -ForegroundColor Gray
+Write-Host "Config ready." -ForegroundColor Green
+Write-Host "Package ready." -ForegroundColor Green
+Write-Host "Usage:" -ForegroundColor Yellow
+Write-Host "  1. Double-click PipelineWatcher.exe to start daemon" -ForegroundColor Gray
+Write-Host "  2. Write task to task_list.txt: ./xxx.csv ./xxx.mp4" -ForegroundColor Gray
+Write-Host "  3. Output in outputs/uv_texture/ (next to input video)" -ForegroundColor Gray
+Write-Host "  4. video_Config.txt has pipe outer diameter and mode (for external use)" -ForegroundColor Gray

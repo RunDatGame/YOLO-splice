@@ -378,6 +378,25 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
     if config.manhole_path is None:
         return StepResult("export", False, "缺少 manhole_path，无法导出拼接 GLB")
 
+    if paths.matched_csv_output.exists() and config.dataset_path is not None:
+        try:
+            import csv as _csv
+            with paths.matched_csv_output.open('r', encoding='utf-8-sig', newline='') as f:
+                reader = _csv.DictReader(f)
+                rows = list(reader)
+            model_paths = [str(row.get('模型路径', '')).strip() for row in rows if str(row.get('模型路径', '')).strip()]
+            if model_paths and all(Path(path).name.lower() == 'pipeline_in.glb' for path in model_paths):
+                process_csv(
+                    str(paths.detect_csv_local),
+                    str(config.dataset_path),
+                    str(paths.matched_csv_output),
+                    default_model=config.default_model,
+                    skip_ck=config.skip_ck,
+                    one_per_segment=config.one_model_per_segment,
+                )
+        except Exception:
+            pass
+
     command = [
         str(config.blender_path),
         "--background",
@@ -390,6 +409,12 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         str(paths.final_glb),
         "--manhole",
         str(config.manhole_path),
+        "--inner",
+        str(config.inner),
+        "--outer",
+        str(config.outer),
+        "--wall-thickness",
+        str(config.wall_thickness),
         "--global-x-offset",
         str(config.global_x_offset),
         "--manhole-half-length",
@@ -403,6 +428,33 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
 
     if not paths.final_glb.exists():
         return StepResult("export", False, "未生成 GLB 文件")
+
+    # Update matched CSV: set model_path to pipeline_In.glb
+    try:
+        import csv as _csv
+        matched = paths.matched_csv_output
+        if matched.exists():
+            with matched.open('r', encoding='utf-8-sig', newline='') as f:
+                reader = _csv.DictReader(f)
+                headers = reader.fieldnames
+                rows = list(reader)
+            if headers and '模型路径' in headers:
+                id_counts = {}
+                for row in rows:
+                    row['模型路径'] = 'pipeline_In.glb'
+                    if '编号' in headers:
+                        base_id = str(row.get('编号', '')).strip()
+                        if not base_id:
+                            base_id = f"InerDisRow{len(id_counts) + 1:04d}"
+                        id_counts[base_id] = id_counts.get(base_id, 0) + 1
+                        row['编号'] = base_id if id_counts[base_id] == 1 else f"{base_id}_{id_counts[base_id]:02d}"
+                with matched.open('w', encoding='utf-8-sig', newline='') as f:
+                    writer = _csv.DictWriter(f, fieldnames=headers)
+                    writer.writeheader()
+                    writer.writerows(rows)
+    except Exception:
+        pass
+
     return StepResult("export", True, "GLB 生成成功", paths.final_glb)
 
 

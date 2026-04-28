@@ -1,5 +1,6 @@
 # src/pipeline_splice/modeling/matcher.py
 import os
+from pathlib import Path
 import pandas as pd
 import re
 from functools import lru_cache
@@ -121,6 +122,7 @@ def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG", skip_ck
     elif one_per_segment:
         print("警告：没有管节序号字段")
 
+    Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv, index=False, encoding="utf-8-sig")
 
     print("CSV 处理完成：", output_csv)

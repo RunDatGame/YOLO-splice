@@ -4,21 +4,93 @@ import csv
 import os
 import sys
 import argparse
-import bmesh
+import hashlib
+from datetime import datetime
 
 
-# ==========================================
-# 辅助函数：清理场景
-# ==========================================
+DEFECT_COLORS = {
+    "破裂": (1.0, 0.15, 0.15, 1.0),
+    "PL": (1.0, 0.15, 0.15, 1.0),
+    "腐蚀": (1.0, 0.45, 0.05, 1.0),
+    "FS": (1.0, 0.45, 0.05, 1.0),
+    "错口": (1.0, 0.85, 0.10, 1.0),
+    "CK": (1.0, 0.85, 0.10, 1.0),
+}
+DEFAULT_HIGHLIGHT_COLOR = (1.0, 0.0, 1.0, 0.7)
+MANHOLE_OUTWARD_OFFSET = 0.4
+PATCH_SURFACE_CLEARANCE = 0.012
+PIPE_JOINT_OVERLAP = 0.04
+RUN_NAME_TOKEN = datetime.now().strftime("%Y%m%d%H%M%S%f")[:-3]
+_global_name_counter = 0
+
+
+def parse_float(value, default=None):
+    if value in (None, ""):
+        return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
+
+
+def segment_origin(seg_id, segment_length):
+    return seg_id * (segment_length - PIPE_JOINT_OVERLAP)
+
+
+def stable_defect_angle(defect_data):
+    key_fields = (
+        defect_data.get("_原始编号", defect_data.get("编号", "")),
+        defect_data.get("模型类型", ""),
+        defect_data.get("管节序号", ""),
+        defect_data.get("节内里程", ""),
+        defect_data.get("病害长", ""),
+        defect_data.get("病害宽", ""),
+    )
+    key = "|".join(str(v) for v in key_fields)
+    digest = hashlib.sha1(key.encode("utf-8")).digest()
+    return (int.from_bytes(digest[:4], "big") % 36000) / 100.0
+
+
+def normalize_defect_id(raw_id, row_index):
+    raw = str(raw_id or "").strip()
+    if raw:
+        return raw
+    return f"InerDisRow{row_index:04d}"
+
+
+def next_global_name(base_name, scope_prefix):
+    global _global_name_counter
+    _global_name_counter += 1
+    return f"{base_name}_{scope_prefix}_{RUN_NAME_TOKEN}_{_global_name_counter:04d}"
+
+
+def classify_imported_object(obj_name, fallback):
+    lower_name = str(obj_name).lower()
+    if "texture_sleeve" in lower_name or "sleeve" in lower_name:
+        return "texture_sleeve"
+    if "world" in lower_name:
+        return "world"
+    if "柱体" in str(obj_name):
+        return "柱体"
+    if "立方体" in str(obj_name):
+        return "立方体"
+    return fallback
+
+
+def rename_imported_objects(objects, scope_prefix, fallback="部件"):
+    for obj in objects:
+        base_name = classify_imported_object(obj.name, fallback)
+        unique_name = next_global_name(base_name, scope_prefix)
+        obj.name = unique_name
+        if getattr(obj, "data", None) is not None:
+            obj.data.name = f"{unique_name}_mesh"
+
+
 def clean_scene():
-    """清理默认场景中的所有物体"""
     if bpy.context.active_object and bpy.context.active_object.mode == 'EDIT':
         bpy.ops.object.mode_set(mode='OBJECT')
-
     bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
-
-    # 清理未使用的无主数据块
     for block in bpy.data.meshes:
         if block.users == 0:
             bpy.data.meshes.remove(block)
@@ -27,235 +99,312 @@ def clean_scene():
             bpy.data.materials.remove(block)
 
 
-# ==========================================
-# 新增函数：放置井室模型 (已修复集合链接问题)
-# ==========================================
-def place_manhole(filepath, name_prefix, location, rotation_z, main_collection):
-    """
-    导入、旋转并放置井室模型。
-    - 井室不需要绕 Y 轴旋转 90 度，以保持井盖朝向 Z 轴（向上）。
-    - 仅应用 Z 轴旋转 (rotation_z) 来调整井口朝向。
-    """
-    print(f"放置井室 {name_prefix}: 位置={location}, 旋转Z={math.degrees(rotation_z):.2f}°")
+def create_patch_material(name, color):
+    mat = bpy.data.materials.new(name=name)
+    mat.diffuse_color = color
+    mat.use_backface_culling = False
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    nodes.clear()
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    bsdf.location = (0, 0)
+    bsdf.inputs["Base Color"].default_value = color
+    bsdf.inputs["Roughness"].default_value = 0.3
+    bsdf.inputs["Emission Color"].default_value = color
+    bsdf.inputs["Emission Strength"].default_value = 1.0
+    if "Alpha" in bsdf.inputs:
+        bsdf.inputs["Alpha"].default_value = color[3]
+    out = nodes.new("ShaderNodeOutputMaterial")
+    out.location = (300, 0)
+    mat.node_tree.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    return mat
+
+
+def create_highlight_patch(defect_data, segment_length, inner_radius, main_collection):
+    seg_id = int(float(defect_data.get("管节序号", 1)))
+    mileage = parse_float(defect_data.get("节内里程"), 0.0)
+    mileage = max(0.0, min(mileage, segment_length - 0.02))
+    axis_angle = parse_float(defect_data.get("轴线偏角"))
+    if axis_angle is None:
+        offset = parse_float(defect_data.get("偏移距"))
+        if offset is not None and inner_radius > 0:
+            axis_angle = math.degrees(offset / inner_radius)
+        else:
+            axis_angle = stable_defect_angle(defect_data)
+    axis_angle = axis_angle % 360.0
+    patch_len = max(parse_float(defect_data.get("病害长"), 0.1), 0.03)
+    patch_wid = max(parse_float(defect_data.get("病害宽"), 0.1), 0.03)
+    defect_type = str(defect_data.get("模型类型", ""))
+    defect_id = str(defect_data.get("编号") or "")
+
+    x_center = segment_origin(seg_id, segment_length) + mileage
+    angle_rad = math.radians(axis_angle)
+    radius = max(inner_radius - PATCH_SURFACE_CLEARANCE, inner_radius * 0.94)
+
+    import random
+    rng = random.Random(hash(defect_id) % (2**31))
+
+    n_radial = 3 + rng.randint(0, 3)
+    n_angular = 6 + rng.randint(0, 4)
+
+    x_half = patch_len / 2
+    arc_half = (patch_wid / inner_radius) / 2
+
+    verts = []
+    for ri in range(n_radial + 1):
+        x_frac = ri / max(n_radial, 1)
+        x = x_center - x_half + x_frac * patch_len
+        for ai in range(n_angular + 1):
+            a_frac = ai / max(n_angular, 1)
+            a = angle_rad - arc_half + a_frac * 2 * arc_half
+            edge_factor = abs(x_frac - 0.5) * 2 + abs(a_frac - 0.5) * 2
+            noise_x = rng.uniform(-0.015, 0.015) * edge_factor
+            noise_a = rng.uniform(-0.08, 0.08) * edge_factor
+            r = radius + rng.uniform(-0.0015, 0.0005)
+            a_noisy = a + noise_a
+            xx = x + noise_x
+            verts.append((r * math.cos(a_noisy), xx, r * math.sin(a_noisy)))
+
+    faces = []
+    for ri in range(n_radial):
+        for ai in range(n_angular):
+            v00 = ri * (n_angular + 1) + ai
+            v01 = v00 + 1
+            v10 = (ri + 1) * (n_angular + 1) + ai
+            v11 = v10 + 1
+            # 贴片用于管内观察，法线朝向管内，避免只显示背面时被管壁盖住。
+            faces.append((v00, v01, v11, v10))
+
+    mesh = bpy.data.meshes.new(defect_id)
+    obj = bpy.data.objects.new(defect_id, mesh)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update(calc_edges=True)
+    mesh.validate()
+    mesh.update()
+    main_collection.objects.link(obj)
+
+    color = DEFECT_COLORS.get(defect_type, DEFAULT_HIGHLIGHT_COLOR)
+    mat = create_patch_material(defect_id, color)
+    obj.data.materials.append(mat)
+    return obj
+
+
+def import_pipe_segment(model_path, seg_id, segment_length, main_collection):
+    if not model_path or not os.path.exists(str(model_path)):
+        return None
 
     try:
-        bpy.ops.import_scene.gltf(filepath=filepath)
+        bpy.ops.import_scene.gltf(filepath=str(model_path))
     except Exception as e:
-        print(f"[错误] 导入井室模型失败 {filepath}: {e}")
-        return
+        print(f"    [错误] 导入失败 {model_path}: {e}")
+        return None
 
-    imported_objects = bpy.context.selected_objects
+    imported_objects = list(bpy.context.selected_objects)
+    segment_objects = []
+    for obj in imported_objects:
+        if obj.name.lower().startswith("world"):
+            bpy.data.objects.remove(obj, do_unlink=True)
+        else:
+            segment_objects.append(obj)
 
-    if not imported_objects:
-        print(f"[警告] {filepath} 导入后没有发现物体")
-        return
+    if not segment_objects:
+        print(f"    [警告] {model_path} 无物体")
+        return None
 
-    # 创建父节点进行统一变换
+    rename_imported_objects(segment_objects, f"seg{seg_id:02d}", fallback="管节部件")
+
     bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
     container = bpy.context.active_object
-    container.name = name_prefix + "_Root"
+    container.name = f"Segment_{seg_id}_Root"
 
-    # 将导入的物体设为 container 的子级并链接到集合 (保持修复后的链接逻辑)
-    for obj in imported_objects:
+    default_collection = bpy.context.scene.collection
+    if container.name in default_collection.objects:
+        default_collection.objects.unlink(container)
+    if container.name not in main_collection.objects:
+        main_collection.objects.link(container)
+
+    for obj in segment_objects:
         obj.parent = container
-
         for coll in list(obj.users_collection):
             if coll != main_collection:
                 coll.objects.unlink(obj)
-
         if obj.name not in main_collection.objects:
             main_collection.objects.link(obj)
 
-    # 将容器也链接到集合 (保持修复后的链接逻辑)
+    # 管节模型库以自身 Z 轴为管长方向；该组合旋转与目标输出保持一致，
+    # 导出 Y-up 后表现为沿管线方向连续排列。
+    x_pos = segment_origin(seg_id, segment_length) + segment_length / 2
+    container.rotation_euler = (0, math.radians(90), math.radians(-90))
+    container.location = (0, x_pos, 0)
+    bpy.context.view_layer.update()
+
+    for obj in segment_objects:
+        world_matrix = obj.matrix_world.copy()
+        obj.parent = None
+        obj.matrix_world = world_matrix
+
+    bpy.data.objects.remove(container, do_unlink=True)
+
+    bpy.ops.object.select_all(action='DESELECT')
+    return segment_objects
+
+
+def place_manhole(filepath, name_prefix, location, rotation_z, main_collection):
+    print(f"  井室 {name_prefix}: X={location[0]:.2f} Y={location[1]:.2f}")
     try:
-        default_collection = bpy.context.scene.collection
-        if container.name in default_collection.objects:
-            default_collection.objects.unlink(container)
-
-        if container.name not in main_collection.objects:
-            main_collection.objects.link(container)
+        bpy.ops.import_scene.gltf(filepath=filepath)
     except Exception as e:
-        print(f"[警告] 链接容器 {container.name} 到集合失败: {e}")
+        print(f"  [错误] 导入井室失败 {filepath}: {e}")
+        return
 
-    # --- 应用变换 (关键修改点) ---
-    # 1. 旋转: 移除 (0, math.radians(90), 0)
-    #    只应用 Z 轴旋转 (rotation_z)
-    container.rotation_euler = (0, 0, rotation_z)  # <--- 修正后的旋转
+    imported_objects = bpy.context.selected_objects
+    if not imported_objects:
+        print(f"  [警告] {filepath} 无物体")
+        return
 
-    # 2. 位移
+    rename_imported_objects(list(imported_objects), name_prefix.lower(), fallback="井室部件")
+
+    bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
+    container = bpy.context.active_object
+    container.name = next_global_name(name_prefix + "_Root", "manhole_root")
+
+    for obj in imported_objects:
+        obj.parent = container
+        # 从其他 collection 移除
+        for coll in list(obj.users_collection):
+            if coll != main_collection:
+                coll.objects.unlink(obj)
+        # 添加到 main_collection（子对象也需要在集合中才能被选中导出）
+        if obj.name not in main_collection.objects:
+            main_collection.objects.link(obj)
+
+    # 只将容器加入 main_collection
+    default_collection = bpy.context.scene.collection
+    if container.name in default_collection.objects:
+        default_collection.objects.unlink(container)
+    if container.name not in main_collection.objects:
+        main_collection.objects.link(container)
+
+    # 绕 Z 轴额外旋转 -90°，使井室朝向 Y 轴方向
+    container.rotation_euler = (0, 0, rotation_z - math.radians(90))
     container.location = location
-
     bpy.ops.object.select_all(action='DESELECT')
 
 
-# ==========================================
-# 核心逻辑 (包含井室) (已实现管道平移)
-# ==========================================
-def run_pipeline(csv_path, output_path, manhole_path, global_x_offset=-2.0, manhole_half_length=2.0):
-    print(f"--- 开始处理 ---")
-    print(f"CSV文件: {csv_path}")
-    print(f"输出路径: {output_path}")
-    print(f"井室路径: {manhole_path}")
+def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickness,
+                 global_x_offset=-2.0, manhole_half_length=2.0):
+    print(f"--- 管道拼接开始 ---")
+    print(f"CSV: {csv_path}")
+    print(f"输出: {output_path}")
+    print(f"管道 内{inner}m / 外{outer}m")
 
     if not os.path.exists(manhole_path):
-        print(f"[致命错误] 井室模型文件不存在: {manhole_path}")
+        print(f"[致命错误] 井室不存在: {manhole_path}")
         return
 
-    GLOBAL_X_OFFSET = global_x_offset
-    MANHOLE_HALF_LENGTH = manhole_half_length
+    inner_radius = inner / 2.0
 
-    print(f"[配置] 全局原点偏移 (X轴): {GLOBAL_X_OFFSET:.2f} 米")
-    print(f"[配置] 井室半长: {MANHOLE_HALF_LENGTH:.2f} 米")
+    all_rows = []
+    segment_length = 3.0
+    max_seg_id = -1
 
-    # 1. 预处理 CSV 数据 (保持不变)
-    segments = []
-    try:
-        with open(csv_path, 'r', encoding='utf-8-sig') as f:
-            reader = csv.DictReader(f)
-            headers = [h.strip() for h in reader.fieldnames]
-            reader.fieldnames = headers
-
-            for row in reader:
-                try:
-                    seg_id = row.get('管节序号')
-                    length = float(row.get('管节长度', 0))
-                    path = row.get('模型路径', '')
-
-                    if path and os.path.exists(path):
-                        segments.append({
-                            'id': seg_id,
-                            'length': length,
-                            'path': path
-                        })
-                except ValueError:
-                    continue
-    except Exception as e:
-        print(f"[错误] 读取 CSV 失败: {e}")
+    if not os.path.exists(csv_path):
+        print(f"[错误] CSV 不存在: {csv_path}")
         return
 
-    # 2. 清理 Blender 场景
+    id_counts = {}
+    with open(csv_path, 'r', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f)
+        for row_index, row in enumerate(reader, start=1):
+            try:
+                seg_id = int(float(row.get("管节序号", 0)))
+                max_seg_id = max(max_seg_id, seg_id)
+                segment_length = float(row.get("管节长度", 3.0))
+                row_dict = dict(row)
+                row_dict['_原始编号'] = row.get("编号", "")
+                base_id = normalize_defect_id(row.get("编号"), row_index)
+                id_counts[base_id] = id_counts.get(base_id, 0) + 1
+                row_dict['编号'] = base_id if id_counts[base_id] == 1 else f"{base_id}_{id_counts[base_id]:02d}"
+                all_rows.append(row_dict)
+            except (ValueError, TypeError):
+                continue
+
+    max_global = 0.0
+    for row in all_rows:
+        sid = int(float(row.get("管节序号", 0)))
+        try:
+            mil = float(row.get("节内里程", 0))
+        except (ValueError, TypeError):
+            mil = 0
+        pos = segment_origin(sid, segment_length) + mil
+        if pos > max_global:
+            max_global = pos
+
+    total_segments = max_seg_id + 1
+    total_length = total_segments * segment_length - max(total_segments - 1, 0) * PIPE_JOINT_OVERLAP
+    print(f"管道总长: {total_length}m ({total_segments} 节), 原始行: {len(all_rows)}, 最大里程: {max_global:.2f}m")
+
+    valid_rows = []
+    for row in all_rows:
+        sid = int(float(row.get("管节序号", 0)))
+        if sid < total_segments:
+            valid_rows.append(row)
+    all_rows = valid_rows
+    print(f"有效病害行: {len(all_rows)}")
+
+    print(f"导出病害贴片行: {len(all_rows)}")
+
     clean_scene()
-
-    accumulated_length = 0.0
-
-    # 创建一个总的集合来存放所有物体
     main_collection = bpy.data.collections.new("PipelineAndManholes")
     bpy.context.scene.collection.children.link(main_collection)
 
-    # ==========================================
-    # 3. 放置起始井室 (井室 A)
-    # ==========================================
-    # 井室原中心点在 X=0，平移后，新位置在 X = -2.0
-    manhole_a_location = (GLOBAL_X_OFFSET, 0, 0)
-    manhole_a_rotation_z = 0
-
+    manhole_start_x = -0.6 - MANHOLE_OUTWARD_OFFSET
     place_manhole(
-        filepath=manhole_path,
-        name_prefix="Manhole_Start",
-        location=manhole_a_location,
-        rotation_z=manhole_a_rotation_z,
-        main_collection=main_collection
+        filepath=manhole_path, name_prefix="Manhole_Start",
+        location=(0, manhole_start_x, 0), rotation_z=0,
+        main_collection=main_collection,
     )
 
-    # ==========================================
-    # 4. 循环导入并放置管道
-    # ==========================================
-    for seg in segments:
-        model_path = seg['path']
-        length = seg['length']
-        seg_id = seg['id']
+    seg_model_map = {}
+    seg_defects_map = {}
+    for row in all_rows:
+        sid = int(float(row.get("管节序号", 0)))
+        seg_defects_map.setdefault(sid, []).append(row)
+        mp = row.get("模型路径", "")
+        if mp and sid not in seg_model_map:
+            seg_model_map[sid] = mp
 
-        # X位置计算： = 累计长度 + 管节中心 (没有额外的起始偏移，因为起始井室已经平移)
-        # 管道的起点是 X=0，所以位置从 0 开始累计
-        x_pos = accumulated_length + (length / 2.0)
+    for seg_id in range(total_segments):
+        model_path = seg_model_map.get(seg_id, "")
+        if model_path:
+            import_pipe_segment(model_path, seg_id, segment_length, main_collection)
+            print(f"    管节 {seg_id}: 导入 {os.path.basename(str(model_path))}")
+        else:
+            print(f"    管节 {seg_id}: 无匹配模型")
 
-        print(f"处理管节 {seg_id}: X位置={x_pos:.2f}, 长度={length:.2f}")
+        for d in seg_defects_map.get(seg_id, []):
+            create_highlight_patch(d, segment_length, inner_radius, main_collection)
 
-        # --- 导入 GLB ---
-        try:
-            bpy.ops.import_scene.gltf(filepath=model_path)
-        except Exception as e:
-            print(f"[错误] 导入失败 {model_path}: {e}")
-            continue
-
-        imported_objects = bpy.context.selected_objects
-
-        if not imported_objects:
-            print(f"[警告] {model_path} 导入后没有发现物体")
-            continue
-
-        # --- 创建父节点进行统一变换 ---
-        bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
-        container = bpy.context.active_object
-        container.name = f"Segment_{seg_id}_Root"
-
-        # 关联父子级和集合 (保持修复后的链接逻辑)
-        for obj in imported_objects:
-            obj.parent = container
-
-            for coll in list(obj.users_collection):
-                if coll != main_collection:
-                    coll.objects.unlink(obj)
-
-            if obj.name not in main_collection.objects:
-                main_collection.objects.link(obj)
-
-        try:
-            default_collection = bpy.context.scene.collection
-            if container.name in default_collection.objects:
-                default_collection.objects.unlink(container)
-
-            if container.name not in main_collection.objects:
-                main_collection.objects.link(container)
-        except Exception as e:
-            print(f"[警告] 链接容器 {container.name} 到集合失败: {e}")
-
-        # --- 应用变换 ---
-        container.rotation_euler = (0, math.radians(90), 0)
-        container.location = (x_pos, 0, 0)
-
-        accumulated_length += length
-        bpy.ops.object.select_all(action='DESELECT')
-
-    # ==========================================
-    # 5. 放置结束井室 (井室 B)
-    # ==========================================
-    # 管道末端位于 accumulated_length 处。
-    # 结束井室的中心应该位于：管道末端 + 井室半长。
-    manhole_b_location = (accumulated_length + MANHOLE_HALF_LENGTH, 0, 0)
-
-    # 结束井室的接口（X轴负方向）需要朝向管道
-    manhole_b_rotation_z = math.radians(180)
-
+    manhole_b_x = total_length + 0.6 + MANHOLE_OUTWARD_OFFSET
     place_manhole(
-        filepath=manhole_path,
-        name_prefix="Manhole_End",
-        location=manhole_b_location,
-        rotation_z=manhole_b_rotation_z,
-        main_collection=main_collection
+        filepath=manhole_path, name_prefix="Manhole_End",
+        location=(0, manhole_b_x, 0), rotation_z=math.radians(180),
+        main_collection=main_collection,
     )
 
-    print(f"--- 拼接完成，管道总长度: {accumulated_length:.2f} 米 ---")
-    print(f"--- 最终模型总长度 (含井室): {manhole_b_location[0] + MANHOLE_HALF_LENGTH:.2f} 米 ---")
-
-    # 6. 导出结果 (保持不变)
-    print(f"正在导出至: {output_path}")
+    print(f"--- 拼接完成 管长: {total_length:.2f}m 井室间距: {manhole_b_x - manhole_start_x:.2f}m (沿Y轴) ---")
+    print(f"导出: {output_path}")
     try:
         bpy.ops.object.select_all(action='SELECT')
         bpy.ops.export_scene.gltf(
-            filepath=output_path,
-            export_format='GLB',
-            use_selection=True,
-            export_yup=True,
-            export_apply=True
+            filepath=output_path, export_format='GLB',
+            use_selection=True, export_yup=True, export_apply=True,
         )
         print("[成功] 导出完成")
     except Exception as e:
         print(f"[失败] 导出出错: {e}")
 
-# ==========================================
-# 参数解析与入口
-# ==========================================
+
 if __name__ == "__main__":
     try:
         argv = sys.argv
@@ -265,20 +414,25 @@ if __name__ == "__main__":
             args = []
 
         parser = argparse.ArgumentParser()
-        parser.add_argument('--csv', required=True, help='CSV文件路径')
-        parser.add_argument('--output', required=True, help='输出GLB路径')
-        parser.add_argument('--manhole', required=True, help='井室GLB模型文件路径')
-        parser.add_argument('--global-x-offset', type=float, default=-2.0, help='全局原点偏移 (X轴)')
-        parser.add_argument('--manhole-half-length', type=float, default=2.0, help='井室半长')
+        parser.add_argument('--csv', required=True)
+        parser.add_argument('--output', required=True)
+        parser.add_argument('--manhole', required=True)
+        parser.add_argument('--inner', type=float, required=True)
+        parser.add_argument('--outer', type=float, required=True)
+        parser.add_argument('--wall-thickness', type=float, default=0.1)
+        parser.add_argument('--global-x-offset', type=float, default=-2.0)
+        parser.add_argument('--manhole-half-length', type=float, default=2.0)
 
         args = parser.parse_args(args)
 
-        run_pipeline(args.csv, args.output, args.manhole, args.global_x_offset, args.manhole_half_length)
+        run_pipeline(
+            args.csv, args.output, args.manhole,
+            args.inner, args.outer, args.wall_thickness,
+            args.global_x_offset, args.manhole_half_length,
+        )
 
     except Exception as e:
-        # 打印详细错误信息有助于调试
         import traceback
-
         traceback.print_exc()
-        print(f"脚本运行错误: {e}")
+        print(f"错误: {e}")
         sys.exit(1)
