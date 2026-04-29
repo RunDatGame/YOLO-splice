@@ -105,8 +105,7 @@ def process_task(
         if not paths.detect_csv_local.exists():
             detect_step = run_detect(task, config, paths, visual_callback=visual_callback)
         else:
-            copy_if_needed(paths.detect_csv_local, paths.detect_csv_output)
-            detect_step = StepResult("detect", True, "已复用现有检测结果", paths.detect_csv_output)
+            detect_step = StepResult("detect", True, "已复用现有检测结果", paths.detect_csv_local)
         result.steps.append(detect_step)
         if not detect_step.success:
             print(detect_step.details)
@@ -146,9 +145,6 @@ def process_task(
     result.steps.append(export_step)
     print("[OK] GLB 生成成功" if export_step.success else f"[FAIL] {export_step.details}")
 
-    info_step = write_info_file(config, paths, source_mesh=source_mesh)
-    result.steps.append(info_step)
-    print(f"[OK] 信息文件生成: {paths.info_txt}")
     print("=" * 40)
     return result
 
@@ -235,8 +231,5 @@ def process_reconstruction_only(
             print("=" * 40)
             return result
 
-    info_step = write_info_file(config, paths, source_mesh=source_mesh)
-    result.steps.append(info_step)
-    print(f"[OK] 信息文件生成: {paths.info_txt}")
     print("=" * 40)
     return result

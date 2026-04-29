@@ -40,14 +40,13 @@ def run_detection_stage(
         best_defects,
         result_dir,
         pipe_params,
-        device=detect_engine.device,
         output_dir=output_dir,
         use_depth=config.use_depth,
         wall_thickness=config.wall_thickness,
         rebar_spacing=config.rebar_spacing,
     )
 
-    detect_csv_local = work_dir / "defect_results_full.csv"
+    detect_csv_local = (output_dir or work_dir) / "defect_results_full.csv"
     if not detect_csv_local.exists():
         import pandas as pd
         pd.DataFrame(columns=[

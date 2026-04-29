@@ -36,6 +36,9 @@ def find_matching_glb(diameter, defect_type, severity, model, all_glb):
     diameter_str = diameter.lower()
     severity_str = (defect_type + severity).lower()
 
+    if not diameter_str or not model or not severity_str:
+        return ""
+
     pattern_str = rf"{diameter_str}.*{model.lower()}.*{severity_str}.*\.glb"
     pattern = re.compile(pattern_str, re.IGNORECASE)
 
@@ -46,7 +49,7 @@ def find_matching_glb(diameter, defect_type, severity, model, all_glb):
 
 
 FILENAME_INDEX_PATTERN = re.compile(
-    r"^(?P<diameter>\d+(?:\.\d+)?m)(?P<model>[a-z]+).*?_(?P<code>(?:pl|fs|ck)\d)_",
+    r"^(?P<diameter>\d+(?:\.\d+)?m)(?P<model>[a-z0-9]+).*?_(?P<code>(?:pl|fs|ck)\d)_",
     re.IGNORECASE,
 )
 
@@ -113,14 +116,15 @@ def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG", skip_ck
 
     df["模型路径"] = new_paths
 
-    if one_per_segment and "管节序号" in df.columns:
-        for seg_id, group in df.groupby("管节序号"):
-            non_empty_idx = group[group["模型路径"] != ""].index.tolist()
-            if len(non_empty_idx) > 1:
-                for idx_to_clear in non_empty_idx[1:]:
-                    df.at[idx_to_clear, "模型路径"] = ""
-    elif one_per_segment:
-        print("警告：没有管节序号字段")
+    if one_per_segment:
+        if "管节序号" in df.columns:
+            for seg_id, group in df.groupby("管节序号"):
+                non_empty_idx = group[group["模型路径"] != ""].index.tolist()
+                if len(non_empty_idx) > 1:
+                    for idx_to_clear in non_empty_idx[1:]:
+                        df.at[idx_to_clear, "模型路径"] = ""
+        else:
+            print("警告：CSV 缺少 '管节序号' 字段，已禁用 one_per_segment 限制")
 
     Path(output_csv).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv, index=False, encoding="utf-8-sig")

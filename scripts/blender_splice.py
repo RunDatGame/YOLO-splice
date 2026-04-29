@@ -313,7 +313,7 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
         return
 
     id_counts = {}
-    with open(csv_path, 'r', encoding='utf-8-sig') as f:
+    with open(csv_path, 'r', encoding='utf-8-sig', newline='') as f:
         reader = csv.DictReader(f)
         for row_index, row in enumerate(reader, start=1):
             try:

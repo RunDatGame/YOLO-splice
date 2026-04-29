@@ -36,7 +36,7 @@ def generate_defect_id() -> str:
     return f"InerDis{timestamp}{_defect_id_counter:03d}"
 
 
-def process_best_defects(best_defects, result_dir, pipe_params, device="cpu", output_dir=None, use_depth=True, wall_thickness=0.1, rebar_spacing=0.0):
+def process_best_defects(best_defects, result_dir, pipe_params, output_dir=None, use_depth=True, wall_thickness=0.1, rebar_spacing=0.0):
     from .depth import calculate_along_pipe_distance, get_frame_depth_map
     from .frames import _load_frame_cached
 

@@ -25,14 +25,14 @@ SRC_DIR = RESOURCE_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from pipeline_splice.uv.runner import process_task
+from pipeline_splice.core.runner import process_task
 
 # ==========================================
 # 配置
 # ==========================================
 WATCH_FILE = BASE_DIR / "task_list.txt"
 LOG_FILE = BASE_DIR / "pipeline_watcher.log"
-DEFAULT_CONFIG = BASE_DIR / "config" / "splice.txt"
+DEFAULT_CONFIG = BASE_DIR / "config.txt"
 
 logging.basicConfig(
     filename=LOG_FILE,

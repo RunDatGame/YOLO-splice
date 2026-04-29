@@ -83,7 +83,7 @@ def filter_best_defects(
     print(f"\n[步骤 3] AI 病害检测")
     yolo_weights = str(get_resource_path("weights/best.pt"))
     if not os.path.exists(yolo_weights):
-        return {}
+        raise FileNotFoundError(f"YOLO 权重文件不存在: {yolo_weights}")
 
     with suppress_stdout():
         model = DetectMultiBackend(

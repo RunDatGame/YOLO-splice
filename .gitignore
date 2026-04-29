@@ -51,6 +51,9 @@ venv.bak/
 *.swo
 *~
 
+# Local backup artifacts
+scripts/blender_splice.py.bak
+
 # OS
 .DS_Store
 Thumbs.db

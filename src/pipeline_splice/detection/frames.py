@@ -99,7 +99,7 @@ def filter_valid_frames(video_path, frame_dir, csv_path, fps):
     return valid
 
 
-@lru_cache(maxsize=64)
+@lru_cache(maxsize=256)
 def _load_frame_cached(frame_path: str):
     """LRU 缓存的帧加载器，防止处理长视频时内存无限增长。"""
     return cv2.imread(frame_path)

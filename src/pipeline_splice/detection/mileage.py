@@ -41,7 +41,7 @@ def load_csv_mileage_map(csv_path):
 def get_frame_mileage(video_path, f_num, start_t, fps, m_map):
     if start_t is None or fps is None or m_map is None:
         return None
-    t_target = start_t + pd.to_timedelta((f_num - 1) / fps, unit="s")
+    t_target = start_t + pd.to_timedelta(f_num / fps, unit="s")
     try:
         m_map = m_map.sort_index()
         loc = m_map.index.searchsorted(t_target)

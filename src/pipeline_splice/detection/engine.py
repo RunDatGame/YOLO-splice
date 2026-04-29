@@ -56,7 +56,7 @@ def run(config_path, visual_callback=None):
 
     pipe_params = (conf["inner"], conf["outer"], conf["length"], conf["segment"])
     best = filter_best_defects(valid, w, h, pipe_params, device=device, visual_callback=visual_callback)
-    process_best_defects(best, result_dir, pipe_params, device=device, output_dir=ROOT)
+    process_best_defects(best, result_dir, pipe_params, output_dir=ROOT)
 
 
 if __name__ == "__main__":

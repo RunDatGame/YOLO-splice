@@ -160,19 +160,31 @@ def build_task_input(csv_path: str | Path, video_path: str | Path, work_dir: str
 
 def build_task_paths(task: TaskInput, model_mode: str) -> TaskPaths:
     mode_tag = "splice" if model_mode == "library" else "reconstruction"
-    mode_dir = task.output_dir / "outputs" / mode_tag / task.video_path.stem
+    video_parent = task.video_path.parent
     return TaskPaths(
-        detect_csv_local=task.work_dir / "defect_results_full.csv",
-        detect_csv_output=mode_dir / "defect_results_full.csv",
-        matched_csv_output=mode_dir / f"detect_results_matched_{mode_tag}.csv",
-        reconstruction_dir=mode_dir / "meshroom_reconstruction",
-        final_glb=mode_dir / "pipeline_In.glb",
-        info_txt=mode_dir / f"video_Config_{mode_tag}.txt",
+        detect_csv_local=task.work_dir / "runs" / "detect" / "defect_results_full.csv",
+        detect_csv_output=video_parent / "defect_results_full.csv",
+        matched_csv_output=video_parent / f"detect_results_matched_{mode_tag}.csv",
+        reconstruction_dir=video_parent / "meshroom_reconstruction",
+        final_glb=video_parent / "pipeline_In.glb",
+        info_txt=video_parent / f"video_Config_{mode_tag}.txt",
         mode_tag=mode_tag,
     )
 
 
-def load_pipeline_config(config_path: Path, task: TaskInput, model_mode_override: str | None = None) -> PipelineConfig:
+def load_pipeline_config(config_path: Path | None, task: TaskInput, model_mode_override: str | None = None) -> PipelineConfig:
+    if config_path is None or not config_path.exists():
+        candidates = [
+            task.work_dir / "config.txt",
+            task.work_dir / "config" / "splice.txt",
+            get_runtime_dir() / "config" / "splice.txt",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                config_path = candidate
+                break
+        else:
+            raise FileNotFoundError(f"找不到配置文件，已尝试: {[str(c) for c in candidates]}")
     raw_config = parse_config_file(config_path)
     work_dir = task.work_dir
 

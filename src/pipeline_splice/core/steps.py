@@ -125,7 +125,10 @@ def expand_runtime_value(value: str, task: TaskInput, config: PipelineConfig, pa
         segment_length=config.length,
         segment_start=config.segment,
     )
-    return value.format_map(context)
+    try:
+        return value.format_map(context)
+    except KeyError as exc:
+        raise ValueError(f"配置值包含未知模板变量: {exc}") from exc
 
 
 def resolve_runtime_path(raw_value: str, task: TaskInput, config: PipelineConfig, paths: TaskPaths) -> Path:
@@ -184,39 +187,39 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
         return StepResult("reconstruct", False, f"抽帧目录不存在，无法执行重建: {frame_dir}")
 
     workspace_dir, images_dir, reconstruction_dir, cache_dir = prepare_meshroom_workspace(task, frame_dir)
-
-    command = [
-        str(config.meshroom_path),
-        "-i",
-        str(images_dir),
-        "-o",
-        str(reconstruction_dir),
-        "--cache",
-        str(cache_dir),
-        "-p",
-        "photogrammetry",
-        "--paramOverrides",
-        f"FeatureExtraction:describerTypes={config.meshroom_describer_types}",
-        "--paramOverrides",
-        f"FeatureExtraction:describerPreset={config.meshroom_describer_preset}",
-        "--paramOverrides",
-        f"ImageMatching:method={config.meshroom_match_method}",
-        "--paramOverrides",
-        f"CameraInit:defaultFieldOfView={config.meshroom_default_fov}",
-        "-v",
-        "info",
-    ]
-
-    if config.meshroom_depth_downscale > 1:
-        command.extend(
-            [
-                "--paramOverrides",
-                f"DepthMap:downscale={config.meshroom_depth_downscale}",
-            ]
-        )
-
     log_path = workspace_dir / "meshroom.log"
+
     try:
+        command = [
+            str(config.meshroom_path),
+            "-i",
+            str(images_dir),
+            "-o",
+            str(reconstruction_dir),
+            "--cache",
+            str(cache_dir),
+            "-p",
+            "photogrammetry",
+            "--paramOverrides",
+            f"FeatureExtraction:describerTypes={config.meshroom_describer_types}",
+            "--paramOverrides",
+            f"FeatureExtraction:describerPreset={config.meshroom_describer_preset}",
+            "--paramOverrides",
+            f"ImageMatching:method={config.meshroom_match_method}",
+            "--paramOverrides",
+            f"CameraInit:defaultFieldOfView={config.meshroom_default_fov}",
+            "-v",
+            "info",
+        ]
+
+        if config.meshroom_depth_downscale > 1:
+            command.extend(
+                [
+                    "--paramOverrides",
+                    f"DepthMap:downscale={config.meshroom_depth_downscale}",
+                ]
+            )
+
         with log_path.open("w", encoding="utf-8") as log_file:
             subprocess.run(
                 command,
@@ -225,6 +228,30 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
             )
+
+        paths.reconstruction_dir.mkdir(parents=True, exist_ok=True)
+        if paths.reconstruction_dir.exists():
+            shutil.rmtree(paths.reconstruction_dir, ignore_errors=True)
+        shutil.copytree(reconstruction_dir, paths.reconstruction_dir, dirs_exist_ok=True)
+
+        mesh_path = find_reconstruction_mesh(paths.reconstruction_dir)
+        if mesh_path is None:
+            details = [
+                f"Meshroom 已执行，但未找到重建 mesh: {paths.reconstruction_dir}",
+                f"临时重建目录: {reconstruction_dir}",
+            ]
+            if log_path.exists():
+                try:
+                    log_tail = log_path.read_text(encoding="utf-8", errors="ignore")[-4000:]
+                    if log_tail.strip():
+                        details.append("Meshroom 日志尾部:")
+                        details.append(log_tail)
+                except OSError:
+                    pass
+            return StepResult("reconstruct", False, "\n".join(details))
+
+        return StepResult("reconstruct", True, "Meshroom 重建完成", mesh_path)
+
     except subprocess.CalledProcessError as error:
         details: list[str] = [
             f"Meshroom 重建失败，返回码: {error.returncode}",
@@ -243,28 +270,9 @@ def run_meshroom_reconstruction(task: TaskInput, config: PipelineConfig, paths: 
                 pass
         return StepResult("reconstruct", False, "\n".join(details))
 
-    paths.reconstruction_dir.mkdir(parents=True, exist_ok=True)
-    if paths.reconstruction_dir.exists():
-        shutil.rmtree(paths.reconstruction_dir, ignore_errors=True)
-    shutil.copytree(reconstruction_dir, paths.reconstruction_dir, dirs_exist_ok=True)
-
-    mesh_path = find_reconstruction_mesh(paths.reconstruction_dir)
-    if mesh_path is None:
-        details = [
-            f"Meshroom 已执行，但未找到重建 mesh: {paths.reconstruction_dir}",
-            f"临时重建目录: {reconstruction_dir}",
-        ]
-        if log_path.exists():
-            try:
-                log_tail = log_path.read_text(encoding="utf-8", errors="ignore")[-4000:]
-                if log_tail.strip():
-                    details.append("Meshroom 日志尾部:")
-                    details.append(log_tail)
-            except OSError:
-                pass
-        return StepResult("reconstruct", False, "\n".join(details))
-
-    return StepResult("reconstruct", True, "Meshroom 重建完成", mesh_path)
+    finally:
+        if workspace_dir.exists():
+            shutil.rmtree(workspace_dir, ignore_errors=True)
 
 
 def run_detect(task: TaskInput, config: PipelineConfig, paths: TaskPaths, visual_callback=None) -> StepResult:
@@ -272,18 +280,17 @@ def run_detect(task: TaskInput, config: PipelineConfig, paths: TaskPaths, visual
         config,
         work_dir=task.work_dir,
         visual_callback=visual_callback,
-        output_dir=task.work_dir,
+        output_dir=task.work_dir / "runs" / "detect",
     )
 
     if not isinstance(artifacts, DetectArtifacts) or not artifacts.detect_csv_local.exists():
         return StepResult("detect", False, "未生成检测 CSV")
 
-    copy_if_needed(artifacts.detect_csv_local, paths.detect_csv_output)
     details = (
         f"检测完成: 抽帧 {artifacts.frame_count} 张, "
         f"有效帧 {artifacts.valid_frame_count} 张"
     )
-    return StepResult("detect", True, details, paths.detect_csv_output)
+    return StepResult("detect", True, details, artifacts.detect_csv_local)
 
 
 def run_match(config: PipelineConfig, paths: TaskPaths) -> StepResult:
@@ -366,9 +373,10 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         ]
 
         try:
-            subprocess.run(command, check=True)
+            subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
         except subprocess.CalledProcessError as error:
-            return StepResult("export", False, f"Blender 重建导出失败: {error}")
+            stderr_text = error.stderr[-4000:] if error.stderr else ""
+            return StepResult("export", False, f"Blender 重建导出失败: {error}\n{stderr_text}")
 
         if not paths.final_glb.exists():
             return StepResult("export", False, "未生成重建 GLB 文件")
@@ -394,8 +402,8 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
                     skip_ck=config.skip_ck,
                     one_per_segment=config.one_model_per_segment,
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[警告] 重新匹配模型失败: {exc}")
 
     command = [
         str(config.blender_path),
@@ -422,9 +430,10 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
     ]
 
     try:
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
     except subprocess.CalledProcessError as error:
-        return StepResult("export", False, f"Blender 运行出错: {error}")
+        stderr_text = error.stderr[-4000:] if error.stderr else ""
+        return StepResult("export", False, f"Blender 运行出错: {error}\n{stderr_text}")
 
     if not paths.final_glb.exists():
         return StepResult("export", False, "未生成 GLB 文件")
@@ -452,8 +461,8 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
                     writer = _csv.DictWriter(f, fieldnames=headers)
                     writer.writeheader()
                     writer.writerows(rows)
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"[警告] 更新 matched CSV 失败: {exc}")
 
     return StepResult("export", True, "GLB 生成成功", paths.final_glb)
 
