@@ -36,6 +36,7 @@ def run_detection_stage(
         pixel_per_meter=config.pixel_per_meter,
     )
 
+    screenshot_base_dir = config.video_path.parent if config.video_path else None
     detect_engine.process_best_defects(
         best_defects,
         result_dir,
@@ -44,6 +45,7 @@ def run_detection_stage(
         use_depth=config.use_depth,
         wall_thickness=config.wall_thickness,
         rebar_spacing=config.rebar_spacing,
+        screenshot_base_dir=screenshot_base_dir,
     )
 
     detect_csv_local = (output_dir or work_dir) / "defect_results_full.csv"

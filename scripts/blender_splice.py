@@ -163,7 +163,7 @@ def create_highlight_patch(defect_data, segment_length, inner_radius, main_colle
             r = radius + rng.uniform(-0.0015, 0.0005)
             a_noisy = a + noise_a
             xx = x + noise_x
-            verts.append((r * math.cos(a_noisy), xx, r * math.sin(a_noisy)))
+            verts.append((xx, r * math.cos(a_noisy), r * math.sin(a_noisy)))
 
     faces = []
     for ri in range(n_radial):
@@ -231,11 +231,11 @@ def import_pipe_segment(model_path, seg_id, segment_length, main_collection):
         if obj.name not in main_collection.objects:
             main_collection.objects.link(obj)
 
-    # 管节模型库以自身 Z 轴为管长方向；该组合旋转与目标输出保持一致，
+    # 管节模型库以自身 Z 轴为管长方向；绕 Y 轴旋转 90° 后 Z 轴对齐到 X 轴，
     # 导出 Y-up 后表现为沿管线方向连续排列。
     x_pos = segment_origin(seg_id, segment_length) + segment_length / 2
-    container.rotation_euler = (0, math.radians(90), math.radians(-90))
-    container.location = (0, x_pos, 0)
+    container.rotation_euler = (0, math.radians(90), 0)
+    container.location = (x_pos, 0, 0)
     bpy.context.view_layer.update()
 
     for obj in segment_objects:
@@ -263,6 +263,16 @@ def place_manhole(filepath, name_prefix, location, rotation_z, main_collection):
         return
 
     rename_imported_objects(list(imported_objects), name_prefix.lower(), fallback="井室部件")
+
+    # 检查并烘焙因 GLTF unitScale 自动引入的对象 scale，避免纹理视觉拉伸
+    for obj in imported_objects:
+        if getattr(obj, "data", None) is None:
+            continue
+        sx, sy, sz = obj.scale
+        if abs(sx - 1.0) > 1e-4 or abs(sy - 1.0) > 1e-4 or abs(sz - 1.0) > 1e-4:
+            print(f"  [INFO] {obj.name} 存在非单位缩放 ({sx:.4f}, {sy:.4f}, {sz:.4f})，已烘焙到网格")
+            bpy.context.view_layer.objects.active = obj
+            bpy.ops.object.transform_apply(scale=True)
 
     bpy.ops.object.empty_add(type='PLAIN_AXES', location=(0, 0, 0))
     container = bpy.context.active_object
@@ -361,7 +371,7 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
     manhole_start_x = -0.6 - MANHOLE_OUTWARD_OFFSET
     place_manhole(
         filepath=manhole_path, name_prefix="Manhole_Start",
-        location=(0, manhole_start_x, 0), rotation_z=0,
+        location=(manhole_start_x, 0, 0), rotation_z=math.radians(90),
         main_collection=main_collection,
     )
 
@@ -388,11 +398,11 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
     manhole_b_x = total_length + 0.6 + MANHOLE_OUTWARD_OFFSET
     place_manhole(
         filepath=manhole_path, name_prefix="Manhole_End",
-        location=(0, manhole_b_x, 0), rotation_z=math.radians(180),
+        location=(manhole_b_x, 0, 0), rotation_z=math.radians(-90),
         main_collection=main_collection,
     )
 
-    print(f"--- 拼接完成 管长: {total_length:.2f}m 井室间距: {manhole_b_x - manhole_start_x:.2f}m (沿Y轴) ---")
+    print(f"--- 拼接完成 管长: {total_length:.2f}m 井室间距: {manhole_b_x - manhole_start_x:.2f}m (沿X轴) ---")
     print(f"导出: {output_path}")
     try:
         bpy.ops.object.select_all(action='SELECT')
