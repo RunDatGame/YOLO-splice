@@ -138,15 +138,20 @@ def process_best_defects(best_defects, result_dir, pipe_params, output_dir=None,
                 final_res.append(info)
 
     if final_res:
-        # 每管节只保留严重等级最高的2个病害
+        # 每管节按病害类型分组，每种类型保留最严重的一个，最多保留4个
         seg_groups = {}
         for d in final_res:
             sid = d.get("管节序号", 0)
-            seg_groups.setdefault(sid, []).append(d)
+            mtype = d.get("模型类型", "")
+            seg_groups.setdefault(sid, {}).setdefault(mtype, []).append(d)
         filtered = []
-        for sid, items in seg_groups.items():
-            items.sort(key=lambda x: (int(str(x.get("严重等级", "1"))), float(str(x.get("病害长", 0))) * float(str(x.get("病害宽", 0)))), reverse=True)
-            filtered.extend(items[:2])
+        for sid, type_groups in seg_groups.items():
+            type_bests = []
+            for mtype, items in type_groups.items():
+                items.sort(key=lambda x: (int(str(x.get("严重等级", "1"))), float(str(x.get("病害长", 0))) * float(str(x.get("病害宽", 0)))), reverse=True)
+                type_bests.append(items[0])
+            type_bests.sort(key=lambda x: (int(str(x.get("严重等级", "1"))), float(str(x.get("病害长", 0))) * float(str(x.get("病害宽", 0)))), reverse=True)
+            filtered.extend(type_bests[:4])
         final_res = filtered
 
         csv_output_dir = Path(output_dir) if output_dir else ROOT

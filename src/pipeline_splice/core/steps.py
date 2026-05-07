@@ -448,15 +448,8 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
                 headers = reader.fieldnames
                 rows = list(reader)
             if headers and '模型路径' in headers:
-                id_counts = {}
                 for row in rows:
                     row['模型路径'] = 'pipeline_In.glb'
-                    if '编号' in headers:
-                        base_id = str(row.get('编号', '')).strip()
-                        if not base_id:
-                            base_id = f"InerDisRow{len(id_counts) + 1:04d}"
-                        id_counts[base_id] = id_counts.get(base_id, 0) + 1
-                        row['编号'] = base_id if id_counts[base_id] == 1 else f"{base_id}_{id_counts[base_id]:02d}"
                 with matched.open('w', encoding='utf-8-sig', newline='') as f:
                     writer = _csv.DictWriter(f, fieldnames=headers)
                     writer.writeheader()

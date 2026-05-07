@@ -411,6 +411,22 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
             use_selection=True, export_yup=True, export_apply=True,
         )
         print("[成功] 导出完成")
+
+        # 将去重后的编号写回 CSV，确保 CSV 与 GLB 贴片编号一致
+        if all_rows:
+            try:
+                fieldnames = list(all_rows[0].keys())
+                if "_原始编号" in fieldnames:
+                    fieldnames.remove("_原始编号")
+                with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    for row in all_rows:
+                        out_row = {k: v for k, v in row.items() if k != "_原始编号"}
+                        writer.writerow(out_row)
+                print(f"[OK] 已更新 CSV 编号: {csv_path}")
+            except Exception as e:
+                print(f"[警告] 更新 CSV 编号失败: {e}")
     except Exception as e:
         print(f"[失败] 导出出错: {e}")
 
