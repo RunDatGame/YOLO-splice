@@ -63,7 +63,7 @@ def save_defect_screenshot(img, bbox, defect_info, output_dir, base_dir=None):
     fname = f"{defect_info['编号']}_{defect_info['模型类型']}_管节{defect_info['管节序号']}.png"
     path = os.path.join(full_dir, fname)
     if cv2.imwrite(path, canvas):
-        return path
+        return path.replace("\\", "/")
     return None
 
 
