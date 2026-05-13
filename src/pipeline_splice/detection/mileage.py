@@ -5,6 +5,9 @@ from pathlib import Path
 import pandas as pd
 from utils.general import LOGGER
 
+THREE_CHANNEL_COLUMN_COUNT = 14
+LEGACY_SINGLE_CHANNEL_MIN_COLUMNS = 6
+
 
 def get_video_start_time(video_path):
     video_name = Path(video_path).stem
@@ -18,21 +21,59 @@ def get_video_start_time(video_path):
     return None
 
 
+def _build_mileage_series(timestamps, mileage):
+    valid = timestamps.notna() & mileage.notna()
+    if not valid.any():
+        return None
+    return mileage[valid].set_axis(timestamps[valid])
+
+
+def _parse_timestamp_column(column):
+    return pd.to_datetime(column, errors="coerce", format="mixed")
+
+
+def _load_three_channel_mileage_map(df):
+    # 三通道雷达 CSV:
+    # 0=时间, 1=毫秒, 2=里程, 3=道数, 后续为姿态/加速度数据。
+    base_time = _parse_timestamp_column(df[0])
+    millis = pd.to_numeric(df[1], errors="coerce").fillna(0)
+    timestamps = base_time + pd.to_timedelta(millis, unit="ms")
+    mileage = pd.to_numeric(df[2], errors="coerce")
+    return _build_mileage_series(timestamps, mileage)
+
+
+def _load_single_channel_mileage_map(df):
+    # 旧单通道 CSV:
+    # 0=完整时间, 4=毫秒, 5=里程。
+    # 注：col0 已含完整时分秒，不再重复叠加 col3 的秒数。
+    base_time = _parse_timestamp_column(df[0])
+    millis = pd.to_numeric(df[4], errors="coerce").fillna(0)
+    timestamps = base_time + pd.to_timedelta(millis, unit="ms")
+    mileage = pd.to_numeric(df[5], errors="coerce")
+    return _build_mileage_series(timestamps, mileage)
+
+
 def load_csv_mileage_map(csv_path):
     if not os.path.exists(csv_path):
         return None
     try:
         df = pd.read_csv(csv_path, header=None, sep=r"\s{2,}|,", engine="python")
-        if df.shape[1] < 6:
+        column_count = df.shape[1]
+        if column_count == THREE_CHANNEL_COLUMN_COUNT:
+            mileage_map = _load_three_channel_mileage_map(df)
+            radar_type = "三通道"
+        elif column_count >= LEGACY_SINGLE_CHANNEL_MIN_COLUMNS:
+            mileage_map = _load_single_channel_mileage_map(df)
+            radar_type = "单通道"
+        else:
+            LOGGER.warning(f"里程 CSV 列数不足 ({column_count}): {csv_path}")
             return None
-        base_time = pd.to_datetime(df[0], errors="coerce")
-        seconds = pd.to_numeric(df[3], errors="coerce").fillna(0)
-        millis = pd.to_numeric(df[4], errors="coerce").fillna(0)
-        full_timestamps = base_time + pd.to_timedelta(seconds, unit="s") + pd.to_timedelta(millis, unit="ms")
-        mil = pd.to_numeric(df[5], errors="coerce")
-        return mil[full_timestamps.notna() & mil.notna()].set_axis(
-            full_timestamps[full_timestamps.notna() & mil.notna()]
-        )
+
+        if mileage_map is None:
+            LOGGER.warning(f"{radar_type}里程 CSV 没有有效时间/里程数据: {csv_path}")
+            return None
+        LOGGER.info(f"已按{radar_type}格式解析里程 CSV: {csv_path} ({column_count}列)")
+        return mileage_map
     except Exception as exc:
         LOGGER.warning(f"里程 CSV 解析失败 ({csv_path}): {exc}")
         return None

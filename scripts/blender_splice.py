@@ -120,7 +120,7 @@ def create_patch_material(name, color):
     return mat
 
 
-def create_highlight_patch(defect_data, segment_length, inner_radius, main_collection):
+def create_highlight_patch(defect_data, segment_length, seg_offset, inner_radius, main_collection):
     seg_id = int(float(defect_data.get("管节序号", 1)))
     mileage = parse_float(defect_data.get("节内里程"), 0.0)
     mileage = max(0.0, min(mileage, segment_length - 0.02))
@@ -137,7 +137,8 @@ def create_highlight_patch(defect_data, segment_length, inner_radius, main_colle
     defect_type = str(defect_data.get("模型类型", ""))
     defect_id = str(defect_data.get("编号") or "")
 
-    x_center = segment_origin(seg_id, segment_length) + mileage
+    physical_index = seg_id - seg_offset
+    x_center = segment_origin(physical_index, segment_length) + mileage
     angle_rad = math.radians(axis_angle)
     radius = max(inner_radius - PATCH_SURFACE_CLEARANCE, inner_radius * 0.94)
 
@@ -189,7 +190,7 @@ def create_highlight_patch(defect_data, segment_length, inner_radius, main_colle
     return obj
 
 
-def import_pipe_segment(model_path, seg_id, segment_length, main_collection):
+def import_pipe_segment(model_path, seg_id, seg_offset, segment_length, main_collection):
     if not model_path or not os.path.exists(str(model_path)):
         return None
 
@@ -233,7 +234,8 @@ def import_pipe_segment(model_path, seg_id, segment_length, main_collection):
 
     # 管节模型库以自身 Z 轴为管长方向；绕 Y 轴旋转 90° 后 Z 轴对齐到 X 轴，
     # 导出 Y-up 后表现为沿管线方向连续排列。
-    x_pos = segment_origin(seg_id, segment_length) + segment_length / 2
+    physical_index = seg_id - seg_offset
+    x_pos = segment_origin(physical_index, segment_length) + segment_length / 2
     container.rotation_euler = (0, math.radians(90), 0)
     container.location = (x_pos, 0, 0)
     bpy.context.view_layer.update()
@@ -339,6 +341,8 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
             except (ValueError, TypeError):
                 continue
 
+    min_seg_id = min((int(float(row.get("管节序号", 0))) for row in all_rows), default=0)
+
     max_global = 0.0
     for row in all_rows:
         sid = int(float(row.get("管节序号", 0)))
@@ -346,18 +350,19 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
             mil = float(row.get("节内里程", 0))
         except (ValueError, TypeError):
             mil = 0
-        pos = segment_origin(sid, segment_length) + mil
+        physical_index = sid - min_seg_id
+        pos = segment_origin(physical_index, segment_length) + mil
         if pos > max_global:
             max_global = pos
 
-    total_segments = max_seg_id + 1
+    total_segments = max_seg_id - min_seg_id + 1
     total_length = total_segments * segment_length - max(total_segments - 1, 0) * PIPE_JOINT_OVERLAP
     print(f"管道总长: {total_length}m ({total_segments} 节), 原始行: {len(all_rows)}, 最大里程: {max_global:.2f}m")
 
     valid_rows = []
     for row in all_rows:
         sid = int(float(row.get("管节序号", 0)))
-        if sid < total_segments:
+        if min_seg_id <= sid <= max_seg_id:
             valid_rows.append(row)
     all_rows = valid_rows
     print(f"有效病害行: {len(all_rows)}")
@@ -384,16 +389,16 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
         if mp and sid not in seg_model_map:
             seg_model_map[sid] = mp
 
-    for seg_id in range(total_segments):
+    for seg_id in range(min_seg_id, max_seg_id + 1):
         model_path = seg_model_map.get(seg_id, "")
         if model_path:
-            import_pipe_segment(model_path, seg_id, segment_length, main_collection)
+            import_pipe_segment(model_path, seg_id, min_seg_id, segment_length, main_collection)
             print(f"    管节 {seg_id}: 导入 {os.path.basename(str(model_path))}")
         else:
             print(f"    管节 {seg_id}: 无匹配模型")
 
         for d in seg_defects_map.get(seg_id, []):
-            create_highlight_patch(d, segment_length, inner_radius, main_collection)
+            create_highlight_patch(d, segment_length, min_seg_id, inner_radius, main_collection)
 
     manhole_b_x = total_length + 0.6 + MANHOLE_OUTWARD_OFFSET
     place_manhole(
