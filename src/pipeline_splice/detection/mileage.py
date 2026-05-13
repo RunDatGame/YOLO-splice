@@ -9,7 +9,28 @@ THREE_CHANNEL_COLUMN_COUNT = 14
 LEGACY_SINGLE_CHANNEL_MIN_COLUMNS = 6
 
 
-def get_video_start_time(video_path):
+def _extract_time_from_csv_first_row(csv_path):
+    """从 CSV 第一行提取时间戳（支持单通道/三通道两种格式）。"""
+    try:
+        df = pd.read_csv(csv_path, header=None, sep=r"\s{2,}|,", engine="python", nrows=1)
+        if df.empty or df.shape[1] < 2:
+            return None
+        base_time = pd.to_datetime(df.iloc[0, 0], errors="coerce")
+        if pd.isna(base_time):
+            return None
+        # 根据列数判断格式并提取毫秒
+        if df.shape[1] < 15:
+            millis = pd.to_numeric(df.iloc[0, 1], errors="coerce")
+        else:
+            millis = pd.to_numeric(df.iloc[0, 4], errors="coerce")
+        if pd.notna(millis):
+            return base_time + pd.to_timedelta(millis, unit="ms")
+        return base_time
+    except Exception:
+        return None
+
+
+def get_video_start_time(video_path, csv_path=None):
     video_name = Path(video_path).stem
     match = re.search(r"(\d{4}[-/]?\d{2}[-/]?\d{2})[-_](\d{6})", video_name)
     if match:
@@ -17,7 +38,13 @@ def get_video_start_time(video_path):
         try:
             return pd.to_datetime(ts_str, format="%Y-%m-%d %H:%M:%S", errors="coerce")
         except ValueError:
-            return None
+            pass
+    # Fallback：从 CSV 第一行提取时间
+    if csv_path and os.path.exists(csv_path):
+        fallback = _extract_time_from_csv_first_row(csv_path)
+        if fallback is not None:
+            LOGGER.info(f"视频名称未包含时间，已从 CSV 提取起始时间: {fallback}")
+            return fallback
     return None
 
 

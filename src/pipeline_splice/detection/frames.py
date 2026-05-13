@@ -75,7 +75,7 @@ def filter_valid_frames(video_path, frame_dir, csv_path, fps):
     from .mileage import get_video_start_time, load_csv_mileage_map, get_frame_mileage
 
     print(f"\n[步骤 2] 里程同步处理")
-    start_time = get_video_start_time(video_path)
+    start_time = get_video_start_time(video_path, csv_path)
     if start_time is None:
         return []
     m_map = load_csv_mileage_map(csv_path)
