@@ -303,8 +303,77 @@ def place_manhole(filepath, name_prefix, location, rotation_z, main_collection):
     bpy.ops.object.select_all(action='DESELECT')
 
 
+def find_default_segment_model(dataset_path, outer_diameter, default_model, default_defects):
+    import re
+    if not dataset_path or not os.path.isdir(dataset_path):
+        return ""
+
+    diameter_str = f"{float(outer_diameter):g}m"
+    model_prefix = str(default_model).strip().upper()
+    defects = [d.strip().upper() for d in str(default_defects).split(",") if d.strip()]
+    if not defects:
+        defects = ["FS1", "PL1"]
+
+    all_candidates = []
+    for root, _, files in os.walk(dataset_path):
+        for f in files:
+            if not f.lower().endswith(".glb"):
+                continue
+            all_candidates.append(os.path.join(root, f))
+
+    def _is_match(path, defect, allow_husc=False):
+        basename = os.path.basename(path)
+        if not re.search(re.escape(diameter_str), basename, re.IGNORECASE):
+            return False
+        if model_prefix not in basename.upper():
+            return False
+        if not re.search(re.escape(defect), basename, re.IGNORECASE):
+            return False
+        if not allow_husc and "HUSC" in basename.upper():
+            return False
+        return True
+
+    # 第一轮：精确匹配 {diameter}{model}_{defect}.glb，排除 HUSC
+    for defect in defects:
+        exact_matches = []
+        pattern = re.compile(
+            rf"^{re.escape(diameter_str)}{re.escape(model_prefix)}_{re.escape(defect)}\.glb$",
+            re.IGNORECASE,
+        )
+        for path in all_candidates:
+            basename = os.path.basename(path)
+            if pattern.match(basename) and "HUSC" not in basename.upper():
+                exact_matches.append(path)
+        if exact_matches:
+            exact_matches.sort()
+            return exact_matches[0]
+
+    # 第二轮：模糊匹配，同管径同前缀且含 defect，排除 HUSC
+    for defect in defects:
+        fuzzy_matches = []
+        for path in all_candidates:
+            if _is_match(path, defect, allow_husc=False):
+                fuzzy_matches.append(path)
+        if fuzzy_matches:
+            fuzzy_matches.sort()
+            return fuzzy_matches[0]
+
+    # 第三轮：允许 HUSC 作为最后 fallback
+    for defect in defects:
+        husc_matches = []
+        for path in all_candidates:
+            if _is_match(path, defect, allow_husc=True):
+                husc_matches.append(path)
+        if husc_matches:
+            husc_matches.sort()
+            return husc_matches[0]
+
+    return ""
+
+
 def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickness,
-                 global_x_offset=-2.0, manhole_half_length=2.0):
+                 global_x_offset=-2.0, manhole_half_length=2.0, dataset_path="",
+                 default_model="QKG", default_defects="FS1,PL1"):
     print(f"--- 管道拼接开始 ---")
     print(f"CSV: {csv_path}")
     print(f"输出: {output_path}")
@@ -389,11 +458,26 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
         if mp and sid not in seg_model_map:
             seg_model_map[sid] = mp
 
+    # 当某个管节没有病害记录时，从模型库按规则查找默认模型
+    default_model_path = next(iter(seg_model_map.values()), "")
+    fallback_model_path = find_default_segment_model(dataset_path, outer, default_model, default_defects)
+    if fallback_model_path:
+        print(f"[INFO] 默认模型已选定: {os.path.basename(fallback_model_path)}")
+    elif dataset_path:
+        print(f"[警告] 模型库中未找到匹配外径 {outer}m 的默认模型，将回退到已有模型")
+
     for seg_id in range(min_seg_id, max_seg_id + 1):
         model_path = seg_model_map.get(seg_id, "")
+        if not model_path and fallback_model_path:
+            model_path = fallback_model_path
+        if not model_path and default_model_path:
+            model_path = default_model_path
         if model_path:
             import_pipe_segment(model_path, seg_id, min_seg_id, segment_length, main_collection)
-            print(f"    管节 {seg_id}: 导入 {os.path.basename(str(model_path))}")
+            if seg_id in seg_model_map:
+                print(f"    管节 {seg_id}: 导入 {os.path.basename(str(model_path))}")
+            else:
+                print(f"    管节 {seg_id}: 导入默认模型 {os.path.basename(str(model_path))}")
         else:
             print(f"    管节 {seg_id}: 无匹配模型")
 
@@ -453,6 +537,9 @@ if __name__ == "__main__":
         parser.add_argument('--wall-thickness', type=float, default=0.1)
         parser.add_argument('--global-x-offset', type=float, default=-2.0)
         parser.add_argument('--manhole-half-length', type=float, default=2.0)
+        parser.add_argument('--dataset', default="")
+        parser.add_argument('--default-model', default="QKG")
+        parser.add_argument('--default-defect', default="FS1,PL1")
 
         args = parser.parse_args(args)
 
@@ -460,6 +547,9 @@ if __name__ == "__main__":
             args.csv, args.output, args.manhole,
             args.inner, args.outer, args.wall_thickness,
             args.global_x_offset, args.manhole_half_length,
+            args.dataset,
+            args.default_model,
+            args.default_defect,
         )
 
     except Exception as e:

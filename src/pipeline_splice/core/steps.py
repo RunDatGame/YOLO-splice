@@ -427,6 +427,12 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         str(config.global_x_offset),
         "--manhole-half-length",
         str(config.manhole_half_length),
+        "--dataset",
+        str(config.dataset_path) if config.dataset_path else "",
+        "--default-model",
+        str(config.default_model) if config.default_model else "QKG",
+        "--default-defect",
+        "FS1,PL1",
     ]
 
     try:
