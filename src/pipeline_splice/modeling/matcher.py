@@ -13,8 +13,6 @@ TYPE_MAP = {
     "错口": "CK",
     # 可继续补充
 }
-
-
 def normalize_diameter(d):
     """ 保证管径 '0.3m' 格式并去除末尾零 """
     if not d:
@@ -86,8 +84,20 @@ def load_glb_catalog(dataset_dir):
     return all_glb, direct_index
 
 
-# ========== 这是最终暴露给外部使用的函数 ==========
-def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG", skip_ck=True, one_per_segment=True):
+def process_csv(
+    input_csv,
+    dataset_dir,
+    output_csv,
+    default_model="QKG",
+    skip_ck=True,
+    one_per_segment=True,
+    total_segments=0,
+    pipe_inner="",
+    pipe_outer="",
+    segment_length_hint="",
+    wall_thickness="",
+    rebar_spacing="",
+):
     df = pd.read_csv(input_csv, dtype=str).fillna("")
 
     all_glb, direct_index = load_glb_catalog(os.path.abspath(dataset_dir))
@@ -119,7 +129,8 @@ def process_csv(input_csv, dataset_dir, output_csv, default_model="QKG", skip_ck
     if one_per_segment:
         if "管节序号" in df.columns:
             for seg_id, group in df.groupby("管节序号"):
-                non_empty_idx = group[group["模型路径"] != ""].index.tolist()
+                non_empty_group = group[group["模型路径"] != ""]
+                non_empty_idx = non_empty_group.index.tolist()
                 if len(non_empty_idx) > 1:
                     for idx_to_clear in non_empty_idx[1:]:
                         df.at[idx_to_clear, "模型路径"] = ""

@@ -25,6 +25,7 @@ DEFECT_TYPE_MAPPING = {
     "PLM": "破裂",
     "PLL": "破裂",
 }
+CAMERA_UP_REFERENCE_ANGLE = 90.0
 
 
 @contextmanager
@@ -76,6 +77,18 @@ def get_angle_range(bbox, cx, cy):
     )
 
 
+def apply_camera_rotation_y(axis_angle, rotation_y):
+    """用三通道 CSV 的 Y 轴旋转角修正病害轴线偏角。
+
+    轴线偏角坐标系为: 右=0, 上=90, 左=180, 下=270。
+    当相机朝上时 rotation_y 应接近 90 度，此时不做修正；
+    其余姿态按相对 90 度的偏差平移病害角度。
+    """
+    if rotation_y is None:
+        return axis_angle
+    return (axis_angle + (rotation_y - CAMERA_UP_REFERENCE_ANGLE)) % 360.0
+
+
 @smart_inference_mode()
 def filter_best_defects(
     valid_frames, w, h, pipe_params, device="cpu", visual_callback=None, pixel_per_meter=1000.0
@@ -96,7 +109,7 @@ def filter_best_defects(
     top_defects = {}
 
     print(f"正在扫描 {len(valid_frames)} 帧...")
-    for idx, (path, mil_abs, mil_rel) in enumerate(valid_frames):
+    for idx, (path, mil_abs, mil_rel, rotation_y) in enumerate(valid_frames):
         if idx % 5 == 0:
             sys.stdout.write(f"\r  -> 进度: {int((idx / len(valid_frames)) * 100)}%")
             sys.stdout.flush()
@@ -131,6 +144,7 @@ def filter_best_defects(
                             "bbox_center": ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2),
                             "segment_index": seg_idx,
                             "absolute_mileage": mil_abs,
+                            "relative_mileage": mil_rel,
                             "model_type": DEFECT_TYPE_MAPPING[lbl],
                             "main_type": lbl[:2],
                             "sub_type": lbl,
@@ -143,7 +157,9 @@ def filter_best_defects(
                                 / pixel_per_meter,
                                 3,
                             ),
-                            "axis_angle": get_angle_range(bbox, cx, cy)[0],
+                            "axis_angle": apply_camera_rotation_y(
+                                get_angle_range(bbox, cx, cy)[0], rotation_y
+                            ),
                             "length": d_len,
                             "width": d_wid,
                             "height": round(d_len * d_wid * 0.1, 3),

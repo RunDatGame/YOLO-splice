@@ -13,6 +13,70 @@ while (Test-Path $DistDir) {
 
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 
+function Get-PreviousPackageCandidates {
+    param(
+        [string]$PackageBaseDir,
+        [string]$CurrentDistDir
+    )
+
+    $currentName = Split-Path $CurrentDistDir -Leaf
+    $candidates = Get-ChildItem -Path $PackageBaseDir -Directory -Filter 'dist-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $currentName } |
+        Sort-Object LastWriteTime -Descending
+
+    return @(
+        foreach ($candidate in $candidates) {
+            $packageRoot = Join-Path $candidate.FullName 'PipelineWatcher'
+            if (Test-Path $packageRoot) {
+                $packageRoot
+            }
+        }
+    )
+}
+
+function Move-PackagedResourceDirs {
+    param(
+        [object[]]$SourcePackageRoots,
+        [string]$TargetPackageRoot
+    )
+
+    if (-not $SourcePackageRoots -or $SourcePackageRoots.Count -eq 0) {
+        Write-Host 'No previous package roots found for resource migration.' -ForegroundColor Yellow
+        return
+    }
+
+    $resourceDirs = @(
+        'blender',
+        '排水管道内缺陷模型库1.0',
+        '排水管道井室模板库1.0'
+    )
+
+    foreach ($dirName in $resourceDirs) {
+        $targetDir = Join-Path $TargetPackageRoot $dirName
+
+        if (Test-Path $targetDir) {
+            Write-Host "Resource already present, skip: $targetDir" -ForegroundColor Gray
+            continue
+        }
+
+        $sourceDir = $null
+        foreach ($packageRoot in $SourcePackageRoots) {
+            $candidateSource = Join-Path $packageRoot $dirName
+            if (Test-Path $candidateSource) {
+                $sourceDir = $candidateSource
+                break
+            }
+        }
+        if (-not $sourceDir) {
+            Write-Host "Resource missing in all previous packages, skip: $dirName" -ForegroundColor Yellow
+            continue
+        }
+
+        Write-Host "Migrating resource: $sourceDir -> $targetDir" -ForegroundColor Cyan
+        Move-Item -LiteralPath $sourceDir -Destination $targetDir
+    }
+}
+
 # Clean old build cache
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$ProjectRoot\build"
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$ProjectRoot\dist"
@@ -85,6 +149,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Build complete. Output: $DistDir\PipelineWatcher" -ForegroundColor Green
+
+$PreviousPackageRoots = Get-PreviousPackageCandidates -PackageBaseDir 'E:\YOLO-splice-package' -CurrentDistDir $DistDir
+Move-PackagedResourceDirs -SourcePackageRoots $PreviousPackageRoots -TargetPackageRoot "$DistDir\PipelineWatcher"
 
 # Copy existing config files from project root (avoid auto-generating to prevent encoding issues)
 Copy-Item -Force "$ProjectRoot\config.txt" "$DistDir\PipelineWatcher\config.txt" -ErrorAction SilentlyContinue

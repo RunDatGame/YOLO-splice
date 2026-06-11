@@ -41,6 +41,35 @@ def resolve_path(base_dir: Path, relative_path: str | Path | None) -> Path | Non
     return (base_dir / path).resolve()
 
 
+def resolve_config_resource_path(
+    work_dir: Path,
+    runtime_dir: Path,
+    config_base_dir: Path,
+    raw_path: str | Path | None,
+) -> Path | None:
+    if raw_path is None:
+        return None
+    path_str = str(raw_path).strip()
+    if not path_str:
+        return None
+
+    path = Path(path_str)
+    if path.is_absolute():
+        return path
+
+    config_candidate = (config_base_dir / path).resolve()
+    if config_candidate.exists():
+        return config_candidate
+    runtime_candidate = (runtime_dir / path).resolve()
+    if runtime_candidate.exists():
+        return runtime_candidate
+    work_candidate = (work_dir / path).resolve()
+    if work_candidate.exists():
+        return work_candidate
+
+    return config_candidate
+
+
 def normalize_meshroom_path(path: Path | None) -> Path | None:
     if path is None:
         return None
@@ -167,6 +196,7 @@ def build_task_paths(task: TaskInput, model_mode: str) -> TaskPaths:
         matched_csv_output=video_parent / f"detect_results_matched_{mode_tag}.csv",
         reconstruction_dir=video_parent / "meshroom_reconstruction",
         final_glb=video_parent / "pipeline_In.glb",
+        patch_glb=video_parent / "pipeline_patches.glb",
         info_txt=video_parent / f"video_Config_{mode_tag}.txt",
         mode_tag=mode_tag,
     )
@@ -188,10 +218,14 @@ def load_pipeline_config(config_path: Path | None, task: TaskInput, model_mode_o
     raw_config = parse_config_file(config_path)
     work_dir = task.work_dir
 
-    blender_path = resolve_path(work_dir, raw_config.get("blender_path"))
-    dataset_path = resolve_path(work_dir, raw_config.get("dataset_path"))
-    meshroom_path = normalize_meshroom_path(resolve_path(work_dir, raw_config.get("meshroom_path")))
-    manhole_path = resolve_path(work_dir, raw_config.get("manhole_path"))
+    config_base_dir = config_path.parent.resolve()
+    runtime_dir = get_runtime_dir()
+    blender_path = resolve_config_resource_path(work_dir, runtime_dir, config_base_dir, raw_config.get("blender_path"))
+    dataset_path = resolve_config_resource_path(work_dir, runtime_dir, config_base_dir, raw_config.get("dataset_path"))
+    meshroom_path = normalize_meshroom_path(
+        resolve_config_resource_path(work_dir, runtime_dir, config_base_dir, raw_config.get("meshroom_path"))
+    )
+    manhole_path = resolve_config_resource_path(work_dir, runtime_dir, config_base_dir, raw_config.get("manhole_path"))
     # 权重路径默认指向打包在 _internal 内的资源（通过 get_runtime_dir 解析）
     runtime_dir = get_runtime_dir()
     yolo_weights_raw = raw_config.get("yolo_weights")

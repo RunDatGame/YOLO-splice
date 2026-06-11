@@ -13,6 +13,16 @@ _defect_id_counter = 0
 SHOT_SIZE = (640, 640)
 
 
+def compute_wall_thickness(pipe_inner, pipe_outer, fallback=0.1):
+    try:
+        inner = float(pipe_inner)
+        outer = float(pipe_outer)
+        thickness = (outer - inner) / 2.0
+        return round(thickness, 4) if thickness > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
 def save_defect_screenshot(img, bbox, defect_info, output_dir, base_dir=None):
     if base_dir is not None:
         full_dir = os.path.join(base_dir, output_dir)
@@ -83,6 +93,7 @@ def process_best_defects(best_defects, result_dir, pipe_params, output_dir=None,
         print("未发现病害")
         return
     pipe_inner, pipe_outer, seg_len, start_seg = pipe_params
+    derived_wall_thickness = compute_wall_thickness(pipe_inner, pipe_outer, fallback=wall_thickness)
     final_res = []
 
     shot_dir = "defect_screenshots"
@@ -107,11 +118,11 @@ def process_best_defects(best_defects, result_dir, pipe_params, output_dir=None,
                 else:
                     depth = None
 
-                segment_relative_mileage = d["absolute_mileage"] % seg_len
-                final_segment_mileage = segment_relative_mileage + calculate_along_pipe_distance(
-                    depth, pipe_inner / 2
+                # 节内里程 = 绝对累计里程（从管道起点 0m 开始）
+                absolute_mileage = d["relative_mileage"]
+                final_segment_mileage = round(
+                    absolute_mileage + calculate_along_pipe_distance(depth, pipe_inner / 2), 3
                 )
-                final_segment_mileage = min(final_segment_mileage, seg_len)
 
                 info = {
                     "编号": generate_defect_id(),
@@ -120,7 +131,7 @@ def process_best_defects(best_defects, result_dir, pipe_params, output_dir=None,
                     "管节内径": pipe_inner,
                     "管节外径": pipe_outer,
                     "管节长度": seg_len,
-                    "管道壁厚": wall_thickness,
+                    "管道壁厚": derived_wall_thickness,
                     "钢筋间距": rebar_spacing,
                     "节内里程": round(final_segment_mileage, 3),
                     "偏移距": d.get("offset", ""),

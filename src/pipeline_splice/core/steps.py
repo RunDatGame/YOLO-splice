@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import shutil
 import shlex
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,6 +20,7 @@ from pipeline_splice.modeling.matcher import process_csv
 from .contracts import DetectArtifacts, PipelineConfig, StepResult, TaskInput, TaskPaths
 from .detect_stage import run_detection_stage
 
+PIPE_JOINT_OVERLAP = 0.04
 RECONSTRUCTION_MESH_NAMES = {
     "texturedmesh.obj",
     "texturedmesh.glb",
@@ -78,6 +81,86 @@ def copy_if_needed(source: Path, target: Path) -> None:
 
 def get_frame_dir(task: TaskInput) -> Path:
     return task.work_dir / "runs" / "detect" / task.video_path.stem / "frames"
+
+
+def estimate_total_segments(config: PipelineConfig) -> int:
+    try:
+        from pipeline_splice.detection.mileage import load_csv_mileage_map
+
+        m_map = load_csv_mileage_map(str(config.raw_csv_path))
+        if m_map is None:
+            return 0
+        max_mileage = float(m_map.max())
+        segment_pitch = max(config.length - PIPE_JOINT_OVERLAP, 0.001)
+        return int(max_mileage / segment_pitch) + 1
+    except Exception:
+        return 0
+
+
+def _load_defect_ids_from_csv(csv_path: Path) -> set[str]:
+    if not csv_path.exists():
+        return set()
+    ids: set[str] = set()
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            defect_id = str(row.get("编号", "")).strip()
+            if defect_id:
+                ids.add(defect_id)
+    return ids
+
+
+def _load_node_names_from_glb(glb_path: Path) -> set[str]:
+    if not glb_path.exists():
+        return set()
+    data = glb_path.read_bytes()
+    if len(data) < 12:
+        return set()
+
+    _, _, total_length = struct.unpack_from("<III", data, 0)
+    offset = 12
+    while offset + 8 <= min(total_length, len(data)):
+        chunk_length, chunk_type = struct.unpack_from("<II", data, offset)
+        offset += 8
+        chunk = data[offset : offset + chunk_length]
+        offset += chunk_length
+        if chunk_type != 0x4E4F534A:
+            continue
+        doc = json.loads(chunk.decode("utf-8"))
+        return {
+            str(node.get("name", "")).strip()
+            for node in doc.get("nodes", [])
+            if str(node.get("name", "")).strip()
+        }
+    return set()
+
+
+def patch_names_match_csv(csv_path: Path, patch_glb_path: Path) -> bool:
+    csv_ids = _load_defect_ids_from_csv(csv_path)
+    if not csv_ids:
+        return True
+    glb_names = _load_node_names_from_glb(patch_glb_path)
+    return csv_ids == glb_names
+
+
+def rewrite_result_csv_model_paths(csv_path: Path, final_glb: Path, patch_glb: Path) -> None:
+    if not csv_path.exists():
+        return
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        headers = list(reader.fieldnames or [])
+        rows = list(reader)
+    if not headers:
+        return
+    patch_glb_str = str(patch_glb)
+    for row in rows:
+        row["模型路径"] = patch_glb_str
+
+    headers = [header for header in headers if header != "病害模型库路径"]
+    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: value for key, value in row.items() if key in headers})
 
 
 def extract_video_frames(task: TaskInput, config: PipelineConfig, force: bool = False) -> StepResult:
@@ -308,6 +391,12 @@ def run_match(config: PipelineConfig, paths: TaskPaths) -> StepResult:
         default_model=config.default_model,
         skip_ck=config.skip_ck,
         one_per_segment=config.one_model_per_segment,
+        total_segments=estimate_total_segments(config),
+        pipe_inner=config.inner,
+        pipe_outer=config.outer,
+        segment_length_hint=config.length,
+        wall_thickness=config.wall_thickness,
+        rebar_spacing=config.rebar_spacing,
     )
     if not paths.matched_csv_output.exists():
         return StepResult("match", False, "未生成匹配 CSV")
@@ -386,25 +475,6 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
     if config.manhole_path is None:
         return StepResult("export", False, "缺少 manhole_path，无法导出拼接 GLB")
 
-    if paths.matched_csv_output.exists() and config.dataset_path is not None:
-        try:
-            import csv as _csv
-            with paths.matched_csv_output.open('r', encoding='utf-8-sig', newline='') as f:
-                reader = _csv.DictReader(f)
-                rows = list(reader)
-            model_paths = [str(row.get('模型路径', '')).strip() for row in rows if str(row.get('模型路径', '')).strip()]
-            if model_paths and all(Path(path).name.lower() == 'pipeline_in.glb' for path in model_paths):
-                process_csv(
-                    str(paths.detect_csv_local),
-                    str(config.dataset_path),
-                    str(paths.matched_csv_output),
-                    default_model=config.default_model,
-                    skip_ck=config.skip_ck,
-                    one_per_segment=config.one_model_per_segment,
-                )
-        except Exception as exc:
-            print(f"[警告] 重新匹配模型失败: {exc}")
-
     command = [
         str(config.blender_path),
         "--background",
@@ -433,7 +503,13 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         str(config.default_model) if config.default_model else "QKG",
         "--default-defect",
         "FS1,PL1",
+        "--patches-output",
+        str(paths.patch_glb),
     ]
+
+    # 计算总管节数（基于里程 CSV 最大里程）
+    total_segments = estimate_total_segments(config)
+    command.extend(["--total-segments", str(total_segments)])
 
     try:
         subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
@@ -441,27 +517,19 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         stderr_text = error.stderr[-4000:] if error.stderr else ""
         return StepResult("export", False, f"Blender 运行出错: {error}\n{stderr_text}")
 
-    if not paths.final_glb.exists():
-        return StepResult("export", False, "未生成 GLB 文件")
+    if _load_defect_ids_from_csv(paths.matched_csv_output):
+        rerun_marker = paths.final_glb.parent / "_patch_export_rerun_marker.txt"
+        rerun_marker.write_text("rerun-started", encoding="utf-8")
+        try:
+            subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
+            rerun_marker.write_text("rerun-completed", encoding="utf-8")
+        except subprocess.CalledProcessError as error:
+            stderr_text = error.stderr[-4000:] if error.stderr else ""
+            return StepResult("export", False, f"Blender 二次导出出错: {error}\n{stderr_text}")
 
-    # Update matched CSV: set model_path to pipeline_In.glb
-    try:
-        import csv as _csv
-        matched = paths.matched_csv_output
-        if matched.exists():
-            with matched.open('r', encoding='utf-8-sig', newline='') as f:
-                reader = _csv.DictReader(f)
-                headers = reader.fieldnames
-                rows = list(reader)
-            if headers and '模型路径' in headers:
-                for row in rows:
-                    row['模型路径'] = 'pipeline_In.glb'
-                with matched.open('w', encoding='utf-8-sig', newline='') as f:
-                    writer = _csv.DictWriter(f, fieldnames=headers)
-                    writer.writeheader()
-                    writer.writerows(rows)
-    except Exception as exc:
-        print(f"[警告] 更新 matched CSV 失败: {exc}")
+    if not paths.final_glb.exists():
+        return StepResult("export", False, "未生成管道 GLB 文件")
+    rewrite_result_csv_model_paths(paths.matched_csv_output, paths.final_glb, paths.patch_glb)
 
     return StepResult("export", True, "GLB 生成成功", paths.final_glb)
 

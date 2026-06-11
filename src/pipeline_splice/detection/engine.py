@@ -19,7 +19,7 @@ from .detector import (
 )
 from .export import process_best_defects, save_defect_screenshot
 from .frames import _load_frame_cached, filter_valid_frames, save_frames
-from .mileage import get_frame_mileage, get_video_start_time, load_csv_mileage_map
+from .mileage import get_frame_mileage, get_frame_roll, get_video_start_time, load_csv_mileage_map, load_csv_roll_map
 
 
 def read_config(path):

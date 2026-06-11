@@ -72,7 +72,13 @@ def save_frames(video_path, output_folder, interval=None):
 
 
 def filter_valid_frames(video_path, frame_dir, csv_path, fps):
-    from .mileage import get_video_start_time, load_csv_mileage_map, get_frame_mileage
+    from .mileage import (
+        get_frame_mileage,
+        get_frame_rotation,
+        get_video_start_time,
+        load_csv_mileage_map,
+        load_csv_rotation_map,
+    )
 
     print(f"\n[步骤 2] 里程同步处理")
     start_time = get_video_start_time(video_path, csv_path)
@@ -81,6 +87,7 @@ def filter_valid_frames(video_path, frame_dir, csv_path, fps):
     m_map = load_csv_mileage_map(csv_path)
     if m_map is None:
         return []
+    rotation_y_map = load_csv_rotation_map(csv_path, axis="y")
     start_mileage_abs = get_frame_mileage(video_path, 1, start_time, fps, m_map)
     files = sorted(
         glob.glob(os.path.join(frame_dir, "frame_*.png")),
@@ -92,7 +99,8 @@ def filter_valid_frames(video_path, frame_dir, csv_path, fps):
             n = int(os.path.basename(p).split("_")[-1].split(".")[0])
             m_abs = get_frame_mileage(video_path, n, start_time, fps, m_map)
             if m_abs is not None:
-                valid.append((p, m_abs, m_abs - start_mileage_abs))
+                rotation_y = get_frame_rotation(video_path, n, start_time, fps, rotation_y_map)
+                valid.append((p, m_abs, m_abs - start_mileage_abs, rotation_y))
         except (ValueError, IndexError):
             continue
     print(f"[INFO] 有效同步帧数: {len(valid)}")

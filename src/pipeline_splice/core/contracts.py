@@ -55,6 +55,7 @@ class TaskPaths:
     matched_csv_output: Path
     reconstruction_dir: Path
     final_glb: Path
+    patch_glb: Path
     info_txt: Path
     mode_tag: str
 
