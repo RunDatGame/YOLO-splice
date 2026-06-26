@@ -5,8 +5,25 @@ from pathlib import Path
 
 from .contracts import PipelineConfig, TaskInput, TaskPaths
 
-FLOAT_KEYS = {"inner", "outer", "length", "meshroom_default_fov", "wall_thickness", "rebar_spacing"}
-INT_KEYS = {"segment", "interval", "meshroom_depth_downscale"}
+FLOAT_KEYS = {
+    "inner",
+    "outer",
+    "length",
+    "meshroom_default_fov",
+    "wall_thickness",
+    "rebar_spacing",
+    "joint_conf",
+    "joint_scale_factor",
+}
+INT_KEYS = {
+    "segment",
+    "interval",
+    "meshroom_depth_downscale",
+    "joint_sample_rate",
+    "joint_max_det",
+    "joint_expected_min",
+    "joint_expected_max",
+}
 MODEL_MODE_ALIASES = {
     "library": "library",
     "splice": "library",
@@ -190,13 +207,16 @@ def build_task_input(csv_path: str | Path, video_path: str | Path, work_dir: str
 def build_task_paths(task: TaskInput, model_mode: str) -> TaskPaths:
     mode_tag = "splice" if model_mode == "library" else "reconstruction"
     video_parent = task.video_path.parent
+    joint_output_dir = video_parent / "output_joint_count"
     return TaskPaths(
         detect_csv_local=task.work_dir / "runs" / "detect" / "defect_results_full.csv",
         detect_csv_output=video_parent / "defect_results_full.csv",
         matched_csv_output=video_parent / f"detect_results_matched_{mode_tag}.csv",
         reconstruction_dir=video_parent / "meshroom_reconstruction",
         final_glb=video_parent / "pipeline_In.glb",
-        patch_glb=video_parent / "pipeline_patches.glb",
+        patch_models_dir=video_parent / "defect_patch_models",
+        joint_output_dir=joint_output_dir,
+        joint_summary_json=joint_output_dir / "joint_count_summary.json",
         info_txt=video_parent / f"video_Config_{mode_tag}.txt",
         mode_tag=mode_tag,
     )
@@ -230,8 +250,10 @@ def load_pipeline_config(config_path: Path | None, task: TaskInput, model_mode_o
     runtime_dir = get_runtime_dir()
     yolo_weights_raw = raw_config.get("yolo_weights")
     depth_weights_raw = raw_config.get("depth_weights")
+    joint_weights_raw = raw_config.get("joint_weights")
     yolo_weights = resolve_path(runtime_dir, yolo_weights_raw) if yolo_weights_raw else (runtime_dir / "weights" / "best.pt")
     depth_weights = resolve_path(runtime_dir, depth_weights_raw) if depth_weights_raw else (runtime_dir / "checkpoints" / "depth_anything_v2_metric_hypersim_vits.pth")
+    joint_weights = resolve_path(runtime_dir, joint_weights_raw) if joint_weights_raw else (runtime_dir / "weights" / "pipe_joint_best.pt")
 
     video_path = resolve_path(work_dir, raw_config.get("video")) or task.video_path
     raw_csv_path = resolve_path(work_dir, raw_config.get("raw")) or task.csv_path
@@ -249,6 +271,27 @@ def load_pipeline_config(config_path: Path | None, task: TaskInput, model_mode_o
     meshroom_default_fov = float(raw_config.get("meshroom_default_fov", 45.0))
     meshroom_depth_downscale = int(raw_config.get("meshroom_depth_downscale", 2))
     use_depth = str(raw_config.get("use_depth", "true")).strip().lower() not in ("false", "0", "no", "off")
+    enable_joint_detection = str(raw_config.get("enable_joint_detection", "true")).strip().lower() not in (
+        "false",
+        "0",
+        "no",
+        "off",
+    )
+    joint_detector_mode = str(raw_config.get("joint_detector_mode", "traditional")).strip().lower() or "traditional"
+    if joint_detector_mode not in {"traditional", "yolo"}:
+        raise ValueError(f"不支持的 joint_detector_mode: {joint_detector_mode}")
+    joint_sample_rate = int(raw_config.get("joint_sample_rate", 15))
+    joint_conf = float(raw_config.get("joint_conf", 0.03))
+    joint_max_det = int(raw_config.get("joint_max_det", 3))
+    joint_scale_factor = float(raw_config.get("joint_scale_factor", 0.35))
+    joint_auto_calibrate = str(raw_config.get("joint_auto_calibrate", "true")).strip().lower() not in (
+        "false",
+        "0",
+        "no",
+        "off",
+    )
+    joint_expected_min = int(raw_config.get("joint_expected_min", 6))
+    joint_expected_max = int(raw_config.get("joint_expected_max", 50))
     default_model = str(raw_config.get("default_model", "QKG")).strip() or "QKG"
     skip_ck = str(raw_config.get("skip_ck", "true")).strip().lower() not in ("false", "0", "no", "off")
     one_model_per_segment = str(raw_config.get("one_model_per_segment", "true")).strip().lower() not in ("false", "0", "no", "off")
@@ -275,6 +318,7 @@ def load_pipeline_config(config_path: Path | None, task: TaskInput, model_mode_o
         manhole_path=manhole_path,
         yolo_weights=yolo_weights,
         depth_weights=depth_weights,
+        joint_weights=joint_weights,
         inner=float(raw_config["inner"]),
         outer=float(raw_config["outer"]),
         length=float(raw_config["length"]),
@@ -283,6 +327,15 @@ def load_pipeline_config(config_path: Path | None, task: TaskInput, model_mode_o
         wall_thickness=float(raw_config.get("wall_thickness", 0.1)),
         rebar_spacing=float(raw_config.get("rebar_spacing", 0.0)),
         use_depth=use_depth,
+        enable_joint_detection=enable_joint_detection,
+        joint_detector_mode=joint_detector_mode,
+        joint_sample_rate=joint_sample_rate,
+        joint_conf=joint_conf,
+        joint_max_det=joint_max_det,
+        joint_scale_factor=joint_scale_factor,
+        joint_auto_calibrate=joint_auto_calibrate,
+        joint_expected_min=joint_expected_min,
+        joint_expected_max=joint_expected_max,
         default_model=default_model,
         skip_ck=skip_ck,
         one_model_per_segment=one_model_per_segment,
@@ -301,6 +354,8 @@ def validate_runtime_config(config: PipelineConfig, task: TaskInput) -> None:
     }
     if config.use_depth:
         common_required["深度权重"] = config.depth_weights
+    if config.enable_joint_detection and config.joint_detector_mode == "yolo":
+        common_required["接缝检测权重"] = config.joint_weights
 
     if config.model_mode == "library":
         common_required["缺陷模型库"] = config.dataset_path
@@ -328,6 +383,8 @@ def validate_detection_config(config: PipelineConfig, task: TaskInput) -> None:
     }
     if config.use_depth:
         required["深度权重"] = config.depth_weights
+    if config.enable_joint_detection and config.joint_detector_mode == "yolo":
+        required["接缝检测权重"] = config.joint_weights
     missing = [f"{name}: {path}" for name, path in required.items() if path is None or not path.exists()]
     if missing:
         raise FileNotFoundError("检测阶段所需文件缺失:\n" + "\n".join(missing))

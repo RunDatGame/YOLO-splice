@@ -28,6 +28,27 @@ raw:
 # false: 跳过深度估计，节内里程不包含沿管偏移
 use_depth: true
 
+# ================= 接缝检测开关 =================
+# true: 在主流程中先运行管节计数，再按计数结果修正后续病害分段与拼接
+enable_joint_detection: true
+# traditional: 环状候选 + 峰值计数（推荐，适合未知单节长度）
+# yolo: 使用 YOLO 接缝检测权重
+joint_detector_mode: traditional
+# 接缝检测权重（仅 joint_detector_mode=yolo 时需要）
+# joint_weights: ./weights/pipe_joint_best.pt
+# 管节计数帧间隔，每 N 帧处理 1 帧
+joint_sample_rate: 15
+# traditional 模式下的缩放比例
+joint_scale_factor: 0.35
+# traditional 模式下是否先做阈值标定
+joint_auto_calibrate: true
+# 管节数量先验范围
+joint_expected_min: 6
+joint_expected_max: 50
+# yolo 模式下保留以下参数
+joint_conf: 0.03
+joint_max_det: 3
+
 # ================= 模型匹配参数 =================
 # 模型文件名前缀（如 QKG / CCG）
 default_model: QKG

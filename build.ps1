@@ -34,7 +34,7 @@ function Get-PreviousPackageCandidates {
     )
 }
 
-function Move-PackagedResourceDirs {
+function Copy-PackagedResourceDirs {
     param(
         [object[]]$SourcePackageRoots,
         [string]$TargetPackageRoot
@@ -72,8 +72,8 @@ function Move-PackagedResourceDirs {
             continue
         }
 
-        Write-Host "Migrating resource: $sourceDir -> $targetDir" -ForegroundColor Cyan
-        Move-Item -LiteralPath $sourceDir -Destination $targetDir
+        Write-Host "Copying resource: $sourceDir -> $targetDir" -ForegroundColor Cyan
+        Copy-Item -LiteralPath $sourceDir -Destination $targetDir -Recurse
     }
 }
 
@@ -104,6 +104,8 @@ $PyInstallerArgs = @(
     "--hidden-import", "pipeline_splice.core.detect_stage",
     "--hidden-import", "pipeline_splice.core.config",
     "--hidden-import", "pipeline_splice.core.contracts",
+    "--hidden-import", "pipeline_splice.joint_counter.api",
+    "--collect-submodules", "pipeline_splice.joint_counter.core",
     "--collect-submodules", "depth_anything_v2",
     "--hidden-import", "pipeline_splice.detection.engine",
     "--hidden-import", "pipeline_splice.detection.mileage",
@@ -112,6 +114,7 @@ $PyInstallerArgs = @(
     "--hidden-import", "pipeline_splice.detection._common",
     "--hidden-import", "pipeline_splice.detection.export",
     "--hidden-import", "pipeline_splice.detection.depth",
+    "--collect-submodules", "ultralytics",
     "--hidden-import", "pandas",
     "--hidden-import", "numpy",
     "--hidden-import", "cv2",
@@ -151,7 +154,7 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Build complete. Output: $DistDir\PipelineWatcher" -ForegroundColor Green
 
 $PreviousPackageRoots = Get-PreviousPackageCandidates -PackageBaseDir 'E:\YOLO-splice-package' -CurrentDistDir $DistDir
-Move-PackagedResourceDirs -SourcePackageRoots $PreviousPackageRoots -TargetPackageRoot "$DistDir\PipelineWatcher"
+Copy-PackagedResourceDirs -SourcePackageRoots $PreviousPackageRoots -TargetPackageRoot "$DistDir\PipelineWatcher"
 
 # Copy existing config files from project root (avoid auto-generating to prevent encoding issues)
 Copy-Item -Force "$ProjectRoot\config.txt" "$DistDir\PipelineWatcher\config.txt" -ErrorAction SilentlyContinue

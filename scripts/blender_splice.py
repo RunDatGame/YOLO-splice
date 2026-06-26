@@ -362,9 +362,69 @@ def find_default_segment_model(dataset_path, outer_diameter, default_model, defa
     return fallbacks[0] if fallbacks else ""
 
 
+def ensure_clean_patch_dir(patches_dir):
+    if not patches_dir:
+        return
+    os.makedirs(patches_dir, exist_ok=True)
+    for name in os.listdir(patches_dir):
+        if name.lower().endswith(".glb"):
+            try:
+                os.remove(os.path.join(patches_dir, name))
+            except OSError as exc:
+                print(f"[警告] 清理旧贴片文件失败 {name}: {exc}")
+
+
+def export_patch_objects(patch_objects, patches_dir):
+    exported_paths = {}
+    if not patch_objects or not patches_dir:
+        return exported_paths
+
+    ensure_clean_patch_dir(patches_dir)
+    for obj in sorted(patch_objects, key=lambda item: item.name):
+        patch_id = str(obj.name).strip()
+        if not patch_id:
+            continue
+        output_path = os.path.join(patches_dir, f"{patch_id}.glb")
+        bpy.ops.object.select_all(action='DESELECT')
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.export_scene.gltf(
+            filepath=output_path,
+            export_format='GLB',
+            use_selection=True,
+            export_yup=True,
+            export_apply=True,
+        )
+        exported_paths[patch_id] = output_path
+    bpy.ops.object.select_all(action='DESELECT')
+    return exported_paths
+
+
+def write_back_csv(csv_path, all_rows, exported_patch_paths):
+    if not all_rows:
+        return
+    fieldnames = list(all_rows[0].keys())
+    if "病害模型库路径" not in fieldnames:
+        insert_at = fieldnames.index("模型路径") + 1 if "模型路径" in fieldnames else len(fieldnames)
+        fieldnames.insert(insert_at, "病害模型库路径")
+    if "_原始编号" in fieldnames:
+        fieldnames.remove("_原始编号")
+
+    with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in all_rows:
+            out_row = dict(row)
+            original_model_path = str(out_row.get("病害模型库路径") or out_row.get("模型路径") or "").strip()
+            out_row["病害模型库路径"] = original_model_path
+            out_row["模型路径"] = exported_patch_paths.get(str(out_row.get("编号", "")).strip(), "")
+            out_row.pop("_原始编号", None)
+            writer.writerow({key: out_row.get(key, "") for key in fieldnames})
+
+
 def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickness,
                  global_x_offset=-2.0, manhole_half_length=2.0, dataset_path="",
-                 default_model="QKG", default_defects="FS1,PL1", patches_output_path=None,
+                 default_model="QKG", default_defects="FS1,PL1", patches_dir=None,
                  total_segments=0):
     print(f"--- 管道拼接开始 ---")
     print(f"CSV: {csv_path}")
@@ -393,6 +453,8 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
                 segment_length = float(row.get("管节长度", 3.0))
                 row_dict = dict(row)
                 row_dict['_原始编号'] = row.get("编号", "")
+                if not str(row_dict.get("病害模型库路径", "")).strip():
+                    row_dict["病害模型库路径"] = str(row.get("模型路径", "")).strip()
                 base_id = normalize_defect_id(row.get("编号"), row_index)
                 id_counts[base_id] = id_counts.get(base_id, 0) + 1
                 row_dict['编号'] = base_id if id_counts[base_id] == 1 else f"{base_id}_{id_counts[base_id]:02d}"
@@ -432,7 +494,7 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
     seg_model_map = {}
     seg_defects_map = {}
     for row in all_rows:
-        mp = row.get("模型路径", "")
+        mp = row.get("病害模型库路径", "") or row.get("模型路径", "")
         # 根据绝对里程计算管节序号
         try:
             mil = float(row.get("节内里程", 0))
@@ -459,6 +521,7 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
 
     # 全管节生成：所有管节都导入模型（有病害的用匹配模型，无病害的用默认模型）
     fallback_idx = 0
+    seg_selected_model_map = {}
     for seg_id in range(total_segments):
         model_path = seg_model_map.get(seg_id, "")
         if not model_path and fallback_models:
@@ -467,6 +530,7 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
         if not model_path and default_model_path:
             model_path = default_model_path
         if model_path:
+            seg_selected_model_map[seg_id] = str(model_path)
             import_pipe_segment(model_path, seg_id, 0, segment_length, pipe_collection)
             if seg_id in seg_model_map:
                 print(f"    管节 {seg_id}: 导入 {os.path.basename(str(model_path))} (匹配)")
@@ -478,6 +542,18 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
 
         for d in seg_defects_map.get(seg_id, []):
             create_highlight_patch(d, segment_length, inner_radius, patch_collection)
+
+    for row in all_rows:
+        if str(row.get("病害模型库路径", "")).strip():
+            continue
+        try:
+            mil = float(row.get("节内里程", 0))
+        except (ValueError, TypeError):
+            mil = 0
+        sid = int(mil / (segment_length - PIPE_JOINT_OVERLAP)) if mil > 0 else 0
+        selected_model = seg_selected_model_map.get(sid, "")
+        if selected_model:
+            row["病害模型库路径"] = selected_model
 
     manhole_b_x = total_length + 0.6 + MANHOLE_OUTWARD_OFFSET
     place_manhole(
@@ -499,38 +575,27 @@ def run_pipeline(csv_path, output_path, manhole_path, inner, outer, wall_thickne
     )
     print("[成功] 管道模型导出完成")
 
-    # 导出病害贴片（如果存在且指定了输出路径）
+    # 导出病害贴片（如果存在且指定了输出目录）
     patch_objects = list(patch_collection.all_objects)
-    if patch_objects and patches_output_path:
-        print(f"导出病害贴片: {patches_output_path}")
+    exported_patch_paths = {}
+    if patch_objects and patches_dir:
+        print(f"导出病害贴片目录: {patches_dir}")
         bpy.context.view_layer.update()
-        bpy.ops.object.select_all(action='DESELECT')
-        for obj in patch_objects:
-            obj.select_set(True)
-        bpy.ops.export_scene.gltf(
-            filepath=patches_output_path, export_format='GLB',
-            use_selection=True, export_yup=True, export_apply=True,
-        )
-        print(f"[成功] 病害贴片导出完成 ({len(patch_objects)} 个贴片)")
+        exported_patch_paths = export_patch_objects(patch_objects, patches_dir)
+        print(f"[成功] 病害贴片导出完成 ({len(exported_patch_paths)} 个贴片)")
     elif not patch_objects:
+        if patches_dir:
+            ensure_clean_patch_dir(patches_dir)
         print("[信息] 无病害贴片，跳过贴片导出")
 
     # 将去重后的编号写回 CSV，确保 CSV 与 GLB 贴片编号一致
     try:
         if all_rows:
             try:
-                fieldnames = list(all_rows[0].keys())
-                if "_原始编号" in fieldnames:
-                    fieldnames.remove("_原始编号")
-                with open(csv_path, 'w', encoding='utf-8-sig', newline='') as f:
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
-                    writer.writeheader()
-                    for row in all_rows:
-                        out_row = {k: v for k, v in row.items() if k != "_原始编号"}
-                        writer.writerow(out_row)
-                print(f"[OK] 已更新 CSV 编号: {csv_path}")
+                write_back_csv(csv_path, all_rows, exported_patch_paths)
+                print(f"[OK] 已更新 CSV 编号和贴片路径: {csv_path}")
             except Exception as e:
-                print(f"[警告] 更新 CSV 编号失败: {e}")
+                print(f"[警告] 更新 CSV 编号和贴片路径失败: {e}")
     except Exception as e:
         print(f"[失败] 操作出错: {e}")
 
@@ -555,7 +620,7 @@ if __name__ == "__main__":
         parser.add_argument('--dataset', default="")
         parser.add_argument('--default-model', default="QKG")
         parser.add_argument('--default-defect', default="FS1,PL1")
-        parser.add_argument('--patches-output', default=None)
+        parser.add_argument('--patches-dir', default=None)
         parser.add_argument('--total-segments', type=int, default=0)
 
         args = parser.parse_args(args)
@@ -567,7 +632,7 @@ if __name__ == "__main__":
             args.dataset,
             args.default_model,
             args.default_defect,
-            args.patches_output,
+            args.patches_dir,
             args.total_segments,
         )
 

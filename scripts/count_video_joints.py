@@ -531,15 +531,33 @@ def resolve_csv_path(csv_arg: str, video_path: Path) -> Path | None:
     return None
 
 
-def main() -> None:
-    args = parse_args()
-    if not args.video:
-        raise ValueError("请通过 --video 指定输入视频")
-
-    video_path = Path(args.video)
-    weights_path = Path(args.weights)
-    output_dir = Path(args.output_dir) if args.output_dir else (video_path.parent / "output_joint_count")
-    csv_path = resolve_csv_path(args.csv, video_path)
+def run_joint_count(
+    video_path: str | Path,
+    weights_path: str | Path,
+    output_dir: str | Path,
+    csv_path: str | Path | None = None,
+    sample_rate: int = 15,
+    conf: float = 0.03,
+    max_det: int = 3,
+    dark_threshold: float = 55.0,
+    center_gate_x: float = 0.22,
+    center_gate_y: float = 0.22,
+    max_missed_samples: int = 1,
+    merge_gap_samples: int = 8,
+    min_cluster_hits: int = 3,
+    strong_center_conf: float = 0.35,
+    area_quantile: float = 0.85,
+    min_area_threshold: float = 0.55,
+    min_peak_area: float = 0.65,
+    mileage_duplicate_ratio: float = 0.45,
+    pipe_end_margin: float = 0.35,
+    pipe_end_plateau_tol: float = 0.08,
+    save_all_frames: bool = False,
+) -> dict:
+    video_path = Path(video_path)
+    weights_path = Path(weights_path)
+    output_dir = Path(output_dir)
+    csv_path = Path(csv_path) if csv_path else resolve_csv_path("", video_path)
     paths = ensure_dirs(output_dir)
 
     if not video_path.exists():
@@ -559,7 +577,7 @@ def main() -> None:
     print(f"Video: {video_path}")
     print(f"Frames: {total_frames}, FPS: {fps:.3f}, Size: {frame_width}x{frame_height}")
 
-    out_fps = min(max(fps / max(args.sample_rate, 1), 1.0), 8.0) if fps > 0 else 4.0
+    out_fps = min(max(fps / max(sample_rate, 1), 1.0), 8.0) if fps > 0 else 4.0
     writer = cv2.VideoWriter(
         str(output_dir / "joint_detection_sampled.mp4"),
         cv2.VideoWriter_fourcc(*"mp4v"),
@@ -578,7 +596,7 @@ def main() -> None:
         ok, frame = cap.read()
         if not ok:
             break
-        if frame_idx % args.sample_rate != 0:
+        if frame_idx % sample_rate != 0:
             frame_idx += 1
             continue
 
@@ -598,7 +616,7 @@ def main() -> None:
         )
 
         best_detection = None
-        if mean_gray < args.dark_threshold:
+        if mean_gray < dark_threshold:
             dark_skipped += 1
             cv2.putText(
                 annotated,
@@ -610,14 +628,14 @@ def main() -> None:
                 2,
             )
         else:
-            results = model(frame, conf=args.conf, verbose=False, max_det=args.max_det)
+            results = model(frame, conf=conf, verbose=False, max_det=max_det)
             boxes = results[0].boxes
             best_payload = choose_best_detection(
                 boxes,
                 frame_width,
                 frame_height,
-                args.center_gate_x,
-                args.center_gate_y,
+                center_gate_x,
+                center_gate_y,
             )
             if best_payload is not None:
                 best_detection = FrameDetection(
@@ -667,8 +685,8 @@ def main() -> None:
 
         half_w = frame_width // 2
         half_h = frame_height // 2
-        gate_x = int(half_w * args.center_gate_x)
-        gate_y = int(half_h * args.center_gate_y)
+        gate_x = int(half_w * center_gate_x)
+        gate_y = int(half_h * center_gate_y)
         cv2.rectangle(
             annotated,
             (half_w - gate_x, half_h - gate_y),
@@ -677,7 +695,7 @@ def main() -> None:
             2,
         )
 
-        if args.save_all_frames:
+        if save_all_frames:
             cv2.imwrite(str(paths["frames"] / f"frame_{frame_idx:06d}.jpg"), annotated)
         writer.write(annotated)
 
@@ -696,29 +714,29 @@ def main() -> None:
     writer.release()
 
     area_values = [det.area_ratio for det in detections if det.center_hit]
-    area_threshold = max(args.min_area_threshold, quantile(area_values, args.area_quantile))
+    area_threshold = max(min_area_threshold, quantile(area_values, area_quantile))
 
     events = cluster_detections(
         detections,
         area_threshold=area_threshold,
-        max_missed_samples=args.max_missed_samples,
-        merge_gap_samples=args.merge_gap_samples,
-        min_cluster_hits=args.min_cluster_hits,
-        strong_center_conf=args.strong_center_conf,
-        min_peak_area=args.min_peak_area,
+        max_missed_samples=max_missed_samples,
+        merge_gap_samples=merge_gap_samples,
+        min_cluster_hits=min_cluster_hits,
+        strong_center_conf=strong_center_conf,
+        min_peak_area=min_peak_area,
     )
     events, median_mileage_gap, max_csv_mileage = enrich_events_with_mileage(
         events,
         csv_path=csv_path,
         video_path=video_path,
         fps=fps,
-        duplicate_ratio=args.mileage_duplicate_ratio,
+        duplicate_ratio=mileage_duplicate_ratio,
     )
     events = prune_events_beyond_pipe_end(
         events,
         max_csv_mileage=max_csv_mileage,
-        pipe_end_margin=args.pipe_end_margin,
-        pipe_end_plateau_tol=args.pipe_end_plateau_tol,
+        pipe_end_margin=pipe_end_margin,
+        pipe_end_plateau_tol=pipe_end_plateau_tol,
     )
     kept_events = [event for event in events if event.keep]
     keep_map = {event.best_frame: event for event in kept_events}
@@ -759,26 +777,26 @@ def main() -> None:
         "video": str(video_path),
         "weights": str(weights_path),
         "csv": str(csv_path) if csv_path else "",
-        "sample_rate": args.sample_rate,
-        "conf": args.conf,
-        "max_det": args.max_det,
-        "dark_threshold": args.dark_threshold,
-        "center_gate_x": args.center_gate_x,
-        "center_gate_y": args.center_gate_y,
-        "max_missed_samples": args.max_missed_samples,
-        "merge_gap_samples": args.merge_gap_samples,
-        "min_cluster_hits": args.min_cluster_hits,
-        "strong_center_conf": args.strong_center_conf,
-        "area_quantile": args.area_quantile,
-        "min_area_threshold": args.min_area_threshold,
+        "sample_rate": sample_rate,
+        "conf": conf,
+        "max_det": max_det,
+        "dark_threshold": dark_threshold,
+        "center_gate_x": center_gate_x,
+        "center_gate_y": center_gate_y,
+        "max_missed_samples": max_missed_samples,
+        "merge_gap_samples": merge_gap_samples,
+        "min_cluster_hits": min_cluster_hits,
+        "strong_center_conf": strong_center_conf,
+        "area_quantile": area_quantile,
+        "min_area_threshold": min_area_threshold,
         "computed_area_threshold": round(area_threshold, 4),
-        "min_peak_area": args.min_peak_area,
-        "mileage_duplicate_ratio": args.mileage_duplicate_ratio,
+        "min_peak_area": min_peak_area,
+        "mileage_duplicate_ratio": mileage_duplicate_ratio,
         "median_mileage_gap": median_mileage_gap,
         "max_csv_mileage": max_csv_mileage,
-        "pipe_end_margin": args.pipe_end_margin,
-        "pipe_end_plateau_tol": args.pipe_end_plateau_tol,
-        "pipe_end_zone_start": round(max_csv_mileage - args.pipe_end_margin, 4) if max_csv_mileage is not None else None,
+        "pipe_end_margin": pipe_end_margin,
+        "pipe_end_plateau_tol": pipe_end_plateau_tol,
+        "pipe_end_zone_start": round(max_csv_mileage - pipe_end_margin, 4) if max_csv_mileage is not None else None,
         "total_frames": total_frames,
         "fps": fps,
         "sampled_frames": sampled_frames,
@@ -805,10 +823,42 @@ def main() -> None:
         print(f"Median mileage gap: {median_mileage_gap if median_mileage_gap is not None else 'N/A'}")
         print(f"Max CSV mileage: {max_csv_mileage if max_csv_mileage is not None else 'N/A'}")
         if max_csv_mileage is not None:
-            print(f"Pipe end zone start: {max_csv_mileage - args.pipe_end_margin:.4f}")
+            print(f"Pipe end zone start: {max_csv_mileage - pipe_end_margin:.4f}")
     print(f"Joint events kept: {len(kept_events)}")
     print(f"Joint events rejected: {len(events) - len(kept_events)}")
     print(f"Output dir: {output_dir}")
+    return summary
+
+
+def main() -> None:
+    args = parse_args()
+    if not args.video:
+        raise ValueError("请通过 --video 指定输入视频")
+
+    output_dir = Path(args.output_dir) if args.output_dir else (Path(args.video).parent / "output_joint_count")
+    run_joint_count(
+        video_path=args.video,
+        weights_path=args.weights,
+        output_dir=output_dir,
+        csv_path=args.csv or None,
+        sample_rate=args.sample_rate,
+        conf=args.conf,
+        max_det=args.max_det,
+        dark_threshold=args.dark_threshold,
+        center_gate_x=args.center_gate_x,
+        center_gate_y=args.center_gate_y,
+        max_missed_samples=args.max_missed_samples,
+        merge_gap_samples=args.merge_gap_samples,
+        min_cluster_hits=args.min_cluster_hits,
+        strong_center_conf=args.strong_center_conf,
+        area_quantile=args.area_quantile,
+        min_area_threshold=args.min_area_threshold,
+        min_peak_area=args.min_peak_area,
+        mileage_duplicate_ratio=args.mileage_duplicate_ratio,
+        pipe_end_margin=args.pipe_end_margin,
+        pipe_end_plateau_tol=args.pipe_end_plateau_tol,
+        save_all_frames=args.save_all_frames,
+    )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 import json
 import os
 import shutil
@@ -14,6 +15,8 @@ from pathlib import Path
 
 import cv2
 from pipeline_splice.detection import engine as detect_engine
+from pipeline_splice.joint_counter.api import count_pipe_joints
+from pipeline_splice.joint_counter.core.pipeline import PipelineConfig as JointPipelineConfig
 
 from pipeline_splice.modeling.matcher import process_csv
 
@@ -83,7 +86,59 @@ def get_frame_dir(task: TaskInput) -> Path:
     return task.work_dir / "runs" / "detect" / task.video_path.stem / "frames"
 
 
-def estimate_total_segments(config: PipelineConfig) -> int:
+def load_joint_summary(summary_path: Path) -> dict:
+    if not summary_path.exists():
+        return {}
+    try:
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def get_joint_report(summary_path: Path) -> dict:
+    summary = load_joint_summary(summary_path)
+    report = summary.get("inspection_report")
+    return report if isinstance(report, dict) else {}
+
+
+def get_joint_segment_length(summary_path: Path) -> float | None:
+    report = get_joint_report(summary_path)
+    value = report.get("segment_length_m")
+    try:
+        parsed = float(value)
+        return parsed if parsed > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def get_joint_total_segments(summary_path: Path) -> int | None:
+    report = get_joint_report(summary_path)
+    candidates = [
+        report.get("joint_count"),
+        load_joint_summary(summary_path).get("joint_count"),
+    ]
+    for value in candidates:
+        try:
+            parsed = int(value)
+            if parsed > 0:
+                return parsed
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def apply_joint_detection_overrides(config: PipelineConfig, paths: TaskPaths) -> PipelineConfig:
+    segment_length = get_joint_segment_length(paths.joint_summary_json)
+    if segment_length is None:
+        return config
+    return replace(config, length=segment_length)
+
+
+def estimate_total_segments(config: PipelineConfig, paths: TaskPaths | None = None) -> int:
+    if paths is not None:
+        joint_total = get_joint_total_segments(paths.joint_summary_json)
+        if joint_total is not None:
+            return joint_total
     try:
         from pipeline_splice.detection.mileage import load_csv_mileage_map
 
@@ -107,6 +162,22 @@ def _load_defect_ids_from_csv(csv_path: Path) -> set[str]:
             if defect_id:
                 ids.add(defect_id)
     return ids
+
+
+def detect_csv_matches_segment_length(csv_path: Path, expected_length: float, tolerance: float = 1e-6) -> bool:
+    if not csv_path.exists():
+        return False
+    try:
+        with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                value = row.get("管节长度", "")
+                if str(value).strip() == "":
+                    continue
+                return abs(float(value) - float(expected_length)) <= tolerance
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
 
 
 def _load_node_names_from_glb(glb_path: Path) -> set[str]:
@@ -134,33 +205,14 @@ def _load_node_names_from_glb(glb_path: Path) -> set[str]:
     return set()
 
 
-def patch_names_match_csv(csv_path: Path, patch_glb_path: Path) -> bool:
+def patch_names_match_csv(csv_path: Path, patch_models_dir: Path) -> bool:
     csv_ids = _load_defect_ids_from_csv(csv_path)
     if not csv_ids:
         return True
-    glb_names = _load_node_names_from_glb(patch_glb_path)
+    if not patch_models_dir.exists():
+        return False
+    glb_names = {path.stem for path in patch_models_dir.glob("*.glb") if path.is_file()}
     return csv_ids == glb_names
-
-
-def rewrite_result_csv_model_paths(csv_path: Path, final_glb: Path, patch_glb: Path) -> None:
-    if not csv_path.exists():
-        return
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        headers = list(reader.fieldnames or [])
-        rows = list(reader)
-    if not headers:
-        return
-    patch_glb_str = str(patch_glb)
-    for row in rows:
-        row["模型路径"] = patch_glb_str
-
-    headers = [header for header in headers if header != "病害模型库路径"]
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=headers)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({key: value for key, value in row.items() if key in headers})
 
 
 def extract_video_frames(task: TaskInput, config: PipelineConfig, force: bool = False) -> StepResult:
@@ -376,6 +428,56 @@ def run_detect(task: TaskInput, config: PipelineConfig, paths: TaskPaths, visual
     return StepResult("detect", True, details, artifacts.detect_csv_local)
 
 
+def run_joint_detection(task: TaskInput, config: PipelineConfig, paths: TaskPaths) -> StepResult:
+    if not config.enable_joint_detection:
+        return StepResult("joint", True, "接缝检测已关闭")
+    if config.joint_detector_mode == "yolo" and (config.joint_weights is None or not config.joint_weights.exists()):
+        return StepResult("joint", False, f"接缝检测权重不存在: {config.joint_weights}")
+
+    if paths.joint_output_dir.exists():
+        shutil.rmtree(paths.joint_output_dir, ignore_errors=True)
+    paths.joint_output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        joint_config = JointPipelineConfig(
+            detector_mode=config.joint_detector_mode,
+            yolo_weights=str(config.joint_weights) if config.joint_detector_mode == "yolo" and config.joint_weights else None,
+            csv_path=str(task.csv_path),
+            frame_interval=config.joint_sample_rate,
+            scale_factor=config.joint_scale_factor,
+            preprocess=False,
+            show_overlay=False,
+            device="cuda" if config.joint_detector_mode == "yolo" else "cpu",
+            auto_calibrate=config.joint_auto_calibrate and config.joint_detector_mode == "traditional",
+            calibration_interval=max(config.joint_sample_rate * 2, 20),
+            expected_joints_min=config.joint_expected_min,
+            expected_joints_max=config.joint_expected_max,
+            show_candidates=False,
+        )
+        result = count_pipe_joints(
+            video_path=task.video_path,
+            csv_path=task.csv_path,
+            config=joint_config,
+            output_json=paths.joint_summary_json,
+            save_report=True,
+        )
+    except Exception as exc:
+        return StepResult("joint", False, f"接缝检测失败: {exc}")
+
+    if not paths.joint_summary_json.exists():
+        return StepResult("joint", False, f"未生成接缝检测汇总文件: {paths.joint_summary_json}")
+
+    report = result.inspection_report
+    if report is not None and report.segment_length_m:
+        details = (
+            f"管节计数完成: 检测 {report.detected_joint_count or result.count} 个, "
+            f"校正后 {report.joint_count} 节, 单节长度 {report.segment_length_m}m"
+        )
+    else:
+        details = f"管节计数完成: {result.count} 个"
+    return StepResult("joint", True, details, paths.joint_summary_json)
+
+
 def run_match(config: PipelineConfig, paths: TaskPaths) -> StepResult:
     if config.model_mode == "reconstruction":
         prepare_reconstruction_csv(paths.detect_csv_local, paths.matched_csv_output)
@@ -391,7 +493,7 @@ def run_match(config: PipelineConfig, paths: TaskPaths) -> StepResult:
         default_model=config.default_model,
         skip_ck=config.skip_ck,
         one_per_segment=config.one_model_per_segment,
-        total_segments=estimate_total_segments(config),
+        total_segments=estimate_total_segments(config, paths),
         pipe_inner=config.inner,
         pipe_outer=config.outer,
         segment_length_hint=config.length,
@@ -503,12 +605,12 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         str(config.default_model) if config.default_model else "QKG",
         "--default-defect",
         "FS1,PL1",
-        "--patches-output",
-        str(paths.patch_glb),
+        "--patches-dir",
+        str(paths.patch_models_dir),
     ]
 
     # 计算总管节数（基于里程 CSV 最大里程）
-    total_segments = estimate_total_segments(config)
+    total_segments = estimate_total_segments(config, paths)
     command.extend(["--total-segments", str(total_segments)])
 
     try:
@@ -517,19 +619,20 @@ def run_export(task: TaskInput, config: PipelineConfig, paths: TaskPaths, source
         stderr_text = error.stderr[-4000:] if error.stderr else ""
         return StepResult("export", False, f"Blender 运行出错: {error}\n{stderr_text}")
 
-    if _load_defect_ids_from_csv(paths.matched_csv_output):
-        rerun_marker = paths.final_glb.parent / "_patch_export_rerun_marker.txt"
-        rerun_marker.write_text("rerun-started", encoding="utf-8")
-        try:
-            subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
-            rerun_marker.write_text("rerun-completed", encoding="utf-8")
-        except subprocess.CalledProcessError as error:
-            stderr_text = error.stderr[-4000:] if error.stderr else ""
-            return StepResult("export", False, f"Blender 二次导出出错: {error}\n{stderr_text}")
-
     if not paths.final_glb.exists():
         return StepResult("export", False, "未生成管道 GLB 文件")
-    rewrite_result_csv_model_paths(paths.matched_csv_output, paths.final_glb, paths.patch_glb)
+    if _load_defect_ids_from_csv(paths.matched_csv_output):
+        if not patch_names_match_csv(paths.matched_csv_output, paths.patch_models_dir):
+            rerun_marker = paths.final_glb.parent / "_patch_export_rerun_marker.txt"
+            rerun_marker.write_text("rerun-started", encoding="utf-8")
+            try:
+                subprocess.run(command, check=True, capture_output=True, text=True, encoding="utf-8", errors="replace")
+                rerun_marker.write_text("rerun-completed", encoding="utf-8")
+            except subprocess.CalledProcessError as error:
+                stderr_text = error.stderr[-4000:] if error.stderr else ""
+                return StepResult("export", False, f"Blender 二次导出出错: {error}\n{stderr_text}")
+            if not patch_names_match_csv(paths.matched_csv_output, paths.patch_models_dir):
+                return StepResult("export", False, "病害贴片导出数量或命名与 CSV 不一致")
 
     return StepResult("export", True, "GLB 生成成功", paths.final_glb)
 

@@ -4,8 +4,6 @@ import time
 import logging
 import threading
 import csv
-import json
-import struct
 import subprocess
 from pathlib import Path
 
@@ -103,6 +101,12 @@ def handle_task(csv_path: str, video_path: str) -> bool:
             work_dir=video_dir,
             config_path=config_path,
         )
+        if not result.success:
+            for step in result.steps:
+                if not step.success:
+                    logging.error(f"步骤失败 [{step.name}]: {step.details}")
+            print("[FAIL] 任务失败")
+            return False
         _repair_patch_glb_if_needed(result)
         logging.info("任务执行完成")
         print("[OK] 任务完成")
@@ -126,28 +130,10 @@ def _load_defect_ids_from_csv(csv_path: Path) -> set[str]:
     return ids
 
 
-def _load_node_names_from_glb(glb_path: Path) -> set[str]:
-    if not glb_path.exists():
+def _load_patch_names_from_dir(patch_models_dir: Path) -> set[str]:
+    if not patch_models_dir.exists():
         return set()
-    data = glb_path.read_bytes()
-    if len(data) < 12:
-        return set()
-    _, _, total_length = struct.unpack_from("<III", data, 0)
-    offset = 12
-    while offset + 8 <= min(total_length, len(data)):
-        chunk_length, chunk_type = struct.unpack_from("<II", data, offset)
-        offset += 8
-        chunk = data[offset : offset + chunk_length]
-        offset += chunk_length
-        if chunk_type != 0x4E4F534A:
-            continue
-        doc = json.loads(chunk.decode("utf-8"))
-        return {
-            str(node.get("name", "")).strip()
-            for node in doc.get("nodes", [])
-            if str(node.get("name", "")).strip()
-        }
-    return set()
+    return {path.stem for path in patch_models_dir.glob("*.glb") if path.is_file()}
 
 
 def _infer_total_segments_from_csv(csv_path: Path) -> int:
@@ -170,7 +156,7 @@ def _repair_patch_glb_if_needed(result) -> None:
         csv_ids = _load_defect_ids_from_csv(paths.matched_csv_output)
         if not csv_ids:
             return
-        glb_names = _load_node_names_from_glb(paths.patch_glb)
+        glb_names = _load_patch_names_from_dir(paths.patch_models_dir)
         if csv_ids == glb_names:
             return
 
@@ -204,8 +190,8 @@ def _repair_patch_glb_if_needed(result) -> None:
             str(config.default_model) if config.default_model else "QKG",
             "--default-defect",
             "FS1,PL1",
-            "--patches-output",
-            str(paths.patch_glb),
+            "--patches-dir",
+            str(paths.patch_models_dir),
             "--total-segments",
             str(total_segments),
         ]

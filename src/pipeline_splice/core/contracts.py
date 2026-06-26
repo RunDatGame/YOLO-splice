@@ -37,9 +37,19 @@ class PipelineConfig:
     interval: int
     yolo_weights: Path | None = None
     depth_weights: Path | None = None
+    joint_weights: Path | None = None
     wall_thickness: float = 0.1
     rebar_spacing: float = 0.0
     use_depth: bool = True
+    enable_joint_detection: bool = True
+    joint_detector_mode: str = "traditional"
+    joint_sample_rate: int = 15
+    joint_conf: float = 0.03
+    joint_max_det: int = 3
+    joint_scale_factor: float = 0.35
+    joint_auto_calibrate: bool = True
+    joint_expected_min: int = 6
+    joint_expected_max: int = 50
     default_model: str = "QKG"
     skip_ck: bool = True
     one_model_per_segment: bool = True
@@ -55,7 +65,9 @@ class TaskPaths:
     matched_csv_output: Path
     reconstruction_dir: Path
     final_glb: Path
-    patch_glb: Path
+    patch_models_dir: Path
+    joint_output_dir: Path
+    joint_summary_json: Path
     info_txt: Path
     mode_tag: str
 

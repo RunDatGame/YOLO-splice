@@ -12,10 +12,13 @@ from .config import (
 )
 from .contracts import PipelineResult, StepResult
 from .steps import (
+    apply_joint_detection_overrides,
     copy_if_needed,
+    detect_csv_matches_segment_length,
     extract_video_frames,
     resolve_runtime_path,
     run_detect,
+    run_joint_detection,
     run_export,
     run_match,
     run_meshroom_reconstruction,
@@ -99,10 +102,30 @@ def process_task(
     print(f"输出目录: {task.output_dir}")
     print("[OK] Config 已更新")
     print(f"建模方式: {'拼接模型' if config.model_mode == 'library' else '三维重建算法'}")
+    total_steps = 4 if config.enable_joint_detection else 3
+
+    if config.enable_joint_detection:
+        print(f">>> [1/{total_steps}] 管节计数...")
+        joint_step = run_joint_detection(task, config, paths)
+        result.steps.append(joint_step)
+        if not joint_step.success:
+            print(joint_step.details)
+            print("=" * 40)
+            return result
+        print(f"[OK] {joint_step.details}")
+        original_length = config.length
+        config = apply_joint_detection_overrides(config, paths)
+        result.config = config
+        if abs(config.length - original_length) > 1e-6:
+            print(f"[INFO] 管节长度已按管节计数结果修正: {original_length}m -> {config.length}m")
 
     if reuse_detection:
-        print(">>> [1/3] 复用已有 DetectV1 结果...")
-        if not paths.detect_csv_local.exists():
+        detect_step_index = 2 if config.enable_joint_detection else 1
+        print(f">>> [{detect_step_index}/{total_steps}] 复用已有 DetectV1 结果...")
+        can_reuse_detection = paths.detect_csv_local.exists() and detect_csv_matches_segment_length(
+            paths.detect_csv_local, config.length
+        )
+        if not can_reuse_detection:
             detect_step = run_detect(task, config, paths, visual_callback=visual_callback)
         else:
             detect_step = StepResult("detect", True, "已复用现有检测结果", paths.detect_csv_local)
@@ -112,7 +135,8 @@ def process_task(
             print("=" * 40)
             return result
     else:
-        print(">>> [1/3] 运行 DetectV1...")
+        detect_step_index = 2 if config.enable_joint_detection else 1
+        print(f">>> [{detect_step_index}/{total_steps}] 运行 DetectV1...")
         detect_step = run_detect(task, config, paths, visual_callback=visual_callback)
         result.steps.append(detect_step)
         if not detect_step.success:
@@ -122,7 +146,8 @@ def process_task(
 
     source_mesh = None
     if config.model_mode == "reconstruction":
-        print(">>> [2/3] 准备重建 mesh...")
+        reconstruction_step_index = 3 if config.enable_joint_detection else 2
+        print(f">>> [{reconstruction_step_index}/{total_steps}] 准备重建 mesh...")
         reconstruction_step = run_reconstruction(task, config, paths)
         result.steps.append(reconstruction_step)
         if not reconstruction_step.success:
@@ -131,7 +156,8 @@ def process_task(
             return result
         source_mesh = reconstruction_step.output_path
     else:
-        print(">>> [2/3] 匹配模型...")
+        match_step_index = 3 if config.enable_joint_detection else 2
+        print(f">>> [{match_step_index}/{total_steps}] 匹配模型...")
         match_step = run_match(config, paths)
         result.steps.append(match_step)
         if not match_step.success:
@@ -139,7 +165,8 @@ def process_task(
             print("=" * 40)
             return result
 
-    print(">>> [3/3] 生成 GLB...")
+    export_step_index = total_steps
+    print(f">>> [{export_step_index}/{total_steps}] 生成 GLB...")
     print(f"目标文件: {paths.final_glb}")
     export_step = run_export(task, config, paths, source_mesh=source_mesh)
     result.steps.append(export_step)
